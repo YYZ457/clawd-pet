@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Clawd 桌宠 · 网页地面",
+  "version": "1.0.0",
+  "description": "让桌面上的 Clawd 能站在、走在网页的 div / 图片 / 按钮上面。只向本机 127.0.0.1:23333 发送元素位置,不收集任何内容。",
+  "host_permissions": ["http://127.0.0.1:23333/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": false }
+  ]
+}
