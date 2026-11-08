@@ -30,10 +30,17 @@
   }
   #choices button:hover { background: #e88a69; transform: translateY(-1px); }
   #choices button:active { transform: translateY(1px); box-shadow: none; }
+  #hitbox {
+    position: fixed; left: 0; top: 0; width: 80px; height: 60px;
+    background: rgba(0, 0, 0, 0.001);
+    pointer-events: auto; cursor: grab; z-index: 2; will-change: transform;
+    border-radius: 12px;
+  }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="hitbox"></div>
 <div id="bubble"></div>
 <div id="choices"></div>
 <script src="rig.js"></script>
