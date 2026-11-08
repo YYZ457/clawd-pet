@@ -8,7 +8,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const MAX_NODES = 160;
   const ACTS = ['wave', 'dance', 'cheer', 'spin', 'flip', 'stretch', 'bow', 'hiccup', 'sneeze', 'moonwalk', 'sit', 'read', 'coffee', 'cookie', 'laptop', 'hop', 'love', 'trip', 'doze', 'startle', 'critter', 'party', 'ball', 'pounce', 'poke', 'ouch', 'notice'];
-  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end'];
+  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall'];
   const ENUM = {
     eye: ['open', 'happy', 'closed', 'wide', 'angry', 'sad', 'x', 'heart', 'dots', '><'],
     mouth: ['smile', 'o', 'big', 'yawn', 'frown', 'flat', 'cat', 'munch'],
@@ -20,7 +20,15 @@
   const NUM = { lift: [0, 6], dy: [-4, 4], sx: [0.5, 1.5], sy: [0.5, 1.5], rot: [-3.2, 3.2], ex: [-1, 1], ey: [-1, 1], blush: [0, 1], blink: [0, 1] };
   const FX = ['heart', 'star', 'note', 'confetti', 'dust', 'zzz', 'text', 'question', 'exclaim', 'sweat', 'anger', 'sparkle', 'snow', 'rain', 'fireworks', 'bubbles'];
   const WAITS = ['pet', 'click', 'near', 'far', 'throw', 'tickle', 'hover', 'grab', 'still', 'move', 'left', 'right', 'top', 'bottom', 'type'];
-  const MOVES = ['left', 'right', 'center', 'cursor', 'item', 'up', 'down', 'window', 'ground'];
+  const MOVES = ['left', 'right', 'center', 'cursor', 'item', 'up', 'down', 'window', 'ground', 'plat', 'point'];
+  const PLAT_STYLES = ['rope', 'plank', 'cloud', 'ledge', 'ice', 'beam'];
+  const ANIMS = ['none', 'bob', 'float', 'spin', 'swing', 'pulse', 'blink', 'drift'];
+  const TAKES = ['head', 'hold', 'balloon', 'back'];
+  const FLY_TO = ['top', 'bottom', 'ground', 'left', 'right', 'center', 'cursor', 'up', 'down', 'point'];
+  const FLY_STYLE = ['float', 'dash', 'bounce'];
+  const FLY_THEN = ['hover', 'fall', 'land'];
+  const JUMP_TO = ['plat', 'cursor', 'left', 'right'];
+  const AT3 = ['left', 'right', 'center'];
   const ATS = ['left', 'right', 'center', 'near', 'far', 'cursor', 'random'];
   const TINTS = ['night', 'sunset', 'forest', 'ocean', 'rose', 'gold', 'dusk', 'none'];
   const OPS = ['==', '!=', '>', '<', '>=', '<='];
@@ -76,17 +84,29 @@
         if (n.loop != null) c.loop = Math.round(num(n.loop, 1, 8, 1));
         break;
       }
-      case 'move': c.to = MOVES.includes(n.to) ? n.to : 'center'; c.run = !!n.run; if (n.item != null) c.item = key(n.item, 8); break;
+      case 'move':
+        c.to = MOVES.includes(n.to) ? n.to : 'center'; c.run = !!n.run; if (n.item != null) c.item = key(n.item, 8);
+        if (c.to === 'plat') { c.key = key(n.key, 8); c.at = AT3.includes(n.at) ? n.at : 'center'; if (!c.key) return null; }
+        if (c.to === 'point') { c.x = num(n.x, 0, 1, 0.5); c.y = num(n.y, 0.1, 0.95, 0.8); }
+        break;
       case 'face': c.dir = ['left', 'right', 'cursor'].includes(n.dir) ? n.dir : 'cursor'; break;
       case 'fx': c.kind = FX.includes(n.kind) ? n.kind : 'star'; c.n = Math.round(num(n.n, 1, 12, 4)); c.text = str(n.text, 6); break;
       case 'item':
         if (n.remove) c.remove = n.remove === true ? true : (key(n.remove, 8) || true);
         else {
-          const e = str(n.emoji, 8); if (!EMOJI.test(e)) return null; c.emoji = e; c.at = ATS.includes(n.at) ? n.at : 'near';
+          const e = str(n.emoji, 8), art = key(n.art, 10);
+          if (art) c.art = art; else if (EMOJI.test(e)) c.emoji = e; else return null;
+          c.at = ATS.includes(n.at) ? n.at : 'near';
+          if (n.x != null) c.x = num(n.x, 0, 1, 0.5);
+          if (n.y != null) c.y = num(n.y, 0.05, 0.98, 0.5);
+          if (n.scale != null) c.scale = num(n.scale, 0.5, 6, 1);
+          if (ANIMS.includes(n.anim) && n.anim !== 'none') c.anim = n.anim;
+          if (n.layer === 'back') c.layer = 'back';
+          if (n.flip) c.flip = true;
           const k = key(n.key, 8); if (k) c.key = k;
         }
         break;
-      case 'take': if (n.key != null) c.key = key(n.key, 8); break;
+      case 'take': if (n.key != null) c.key = key(n.key, 8); c.how = TAKES.includes(n.how) ? n.how : 'head'; break;
       case 'put': break;
       case 'wear': {
         for (const k of ['hat', 'glasses', 'prop']) { if (n[k] === 'none') c[k] = 'none'; else if (ENUM[k].includes(n[k])) c[k] = n[k]; }
@@ -120,6 +140,36 @@
       case 'loop': c.n = Math.round(num(n.n, 1, 8, 2)); c.to = key(n.to, 12); if (!c.to) return null; break;
       case 'continue': c.hint = str(n.hint, 120); break;
       case 'end': c.text = str(n.text, 50); break;
+      case 'sprite': {
+        const name = key(n.name, 8); if (!name || !Array.isArray(n.rows)) return null;
+        const rows = n.rows.slice(0, 24).map(r => String(r == null ? '' : r).replace(/[\u0000-\u001f\u007f\s]/g, '.').slice(0, 24));
+        if (rows.length < 2 || !rows.some(r => /[^.]/.test(r))) return null;
+        const pal = {};
+        if (n.pal && typeof n.pal === 'object' && !Array.isArray(n.pal)) {
+          let cnt = 0; for (const ch of Object.keys(n.pal)) { if ([...ch].length !== 1 || ch === '.' || cnt >= 12) continue; const v = String(n.pal[ch]); if (/^#[0-9a-fA-F]{6}$/.test(v)) { pal[ch] = v; cnt++; } }
+        }
+        ids.__sp = (ids.__sp || 0) + 1; if (ids.__sp > 8) return null;
+        c.name = name; c.rows = rows; c.pal = pal; c.anchor = n.anchor === 'c' ? 'c' : 'b';
+        break;
+      }
+      case 'platform': {
+        if (n.remove) { c.remove = n.remove === true ? true : (key(n.remove, 8) || true); break; }
+        c.key = key(n.key, 8) || 'pl';
+        let x1 = num(n.x1, 0, 1, 0.3), x2 = num(n.x2, 0, 1, 0.7); if (x2 < x1) { const t = x1; x1 = x2; x2 = t; } if (x2 - x1 < 0.08) x2 = Math.min(1, x1 + 0.08);
+        c.x1 = x1; c.x2 = x2; c.y = num(n.y, 0.15, 0.92, 0.5); c.style = PLAT_STYLES.includes(n.style) ? n.style : 'plank';
+        break;
+      }
+      case 'fly':
+        c.to = FLY_TO.includes(n.to) ? n.to : ((n.x != null || n.y != null) ? 'point' : 'top');
+        if (n.x != null) c.x = num(n.x, 0, 1, 0.5); if (n.y != null) c.y = num(n.y, 0.08, 0.95, 0.5);
+        c.sec = num(n.sec, 0.5, 15, 3); c.style = FLY_STYLE.includes(n.style) ? n.style : 'float'; c.then = FLY_THEN.includes(n.then) ? n.then : 'hover';
+        break;
+      case 'jump':
+        c.h = n.h === 'top' ? 1 : num(n.h, 0.05, 1, 0.4); c.to = JUMP_TO.includes(n.to) ? n.to : '';
+        if (n.key != null) c.key = key(n.key, 8); c.at = AT3.includes(n.at) ? n.at : 'center'; c.dx = num(n.dx, -1, 1, 0);
+        if (c.to === 'plat' && !c.key) c.to = '';
+        break;
+      case 'fall': break;
     }
     return c;
   }
@@ -131,7 +181,7 @@
     for (const n of nodes) {
       if (n.next && !have.has(n.next)) delete n.next;
       if (n.timeout && !have.has(n.timeout)) delete n.timeout;
-      if (n.then) n.then = ok(n.then); if (n.else) n.else = ok(n.else);
+      if (n.t === 'if') { n.then = ok(n.then); n.else = ok(n.else); }
       if (n.t === 'random') { n.to = n.to.filter(x => have.has(x)); }
       if (n.t === 'loop' && !have.has(n.to)) n.n = 0;
       if (n.choices) n.choices.forEach(c => { if (c.next && !have.has(c.next)) c.next = ''; });
@@ -178,5 +228,5 @@
     return false;
   }
 
-  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES };
+  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES, PLAT_STYLES, ANIMS, TAKES, FLY_TO, FLY_STYLE, FLY_THEN, JUMP_TO };
 });

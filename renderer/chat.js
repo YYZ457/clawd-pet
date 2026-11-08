@@ -25,7 +25,7 @@
       if (!reply) {
         const b = $('builtin'); b.innerHTML = '';
         for (const s of st.builtin) { const c = document.createElement('button'); c.className = 'chip'; c.textContent = '▶ ' + s.title; c.title = s.desc; c.onclick = () => api.chatBuiltin(s.id); b.appendChild(c); }
-        const ideas = ['演一出海盗寻宝', '演一出外星人来访', '学个害羞转圈的动作', '讲个冷笑话', '陪我聊两句'];
+        const ideas = ['演一出走钢丝', '抓着热气球飞上天', '演一出海盗寻宝', '学个害羞转圈的动作', '陪我聊两句'];
         const i = $('ideas'); i.innerHTML = '';
         for (const t of ideas) { const c = document.createElement('button'); c.className = 'chip'; c.textContent = t; c.onclick = () => { inp.value = t; inp.focus(); }; i.appendChild(c); }
         if (!st.enabled || !st.hasKey) setStatus('没填 Key 也能玩内置剧场;想让它即兴编剧,点右上角 ⚙ 填 DeepSeek Key。');

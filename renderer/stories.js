@@ -120,6 +120,54 @@
     }
   };
 
+  S.circus = {
+    title: '马戏团', desc: '走钢丝 / 热气球 / 蹦到屏幕顶(不用 Key)',
+    script: {
+      kind: 'story', title: '马戏团', nodes: [
+        { id: 'a', t: 'wear', hat: 'party' },
+        { id: 'a1', t: 'say', text: '欢迎来到 Clawd 马戏团!', pose: { eye: 'happy', mouth: 'big' }, fx: 'confetti' },
+        { id: 'c', t: 'ask', text: '先看哪个节目?', choices: [{ text: '走钢丝', next: 'r1' }, { text: '热气球', next: 'b1' }, { text: '蹦到顶', next: 'j1' }] },
+        { id: 'r1', t: 'platform', key: 'rp', x1: 0.25, x2: 0.75, y: 0.42, style: 'rope' },
+        { id: 'r2', t: 'say', text: '走钢丝!请屏住呼吸…', ms: 1600 },
+        { id: 'r3', t: 'move', to: 'plat', key: 'rp', at: 'left' },
+        { id: 'r4', t: 'say', text: '(咽口水)', pose: { eye: 'wide', mouth: 'o' }, fx: 'sweat', ms: 1300 },
+        { id: 'r5', t: 'move', to: 'plat', key: 'rp', at: 'right' },
+        { id: 'r6', t: 'ask', text: '给我加个油?', choices: [{ text: '加油!', next: 'r7', set: { nerve: '+1' } }, { text: '吓唬它', next: 'r8' }] },
+        { id: 'r7', t: 'say', text: '有你在,我不怕!', fx: 'heart', next: 'r10' },
+        { id: 'r8', t: 'say', text: '哇啊!别吓我!', pose: { eye: '><', mouth: 'o' }, fx: 'exclaim', ms: 1200 },
+        { id: 'r9', t: 'platform', remove: 'rp' },
+        { id: 'r9b', t: 'anim', dur: 1.5, keys: [{ t: 0, eye: 'x', mouth: 'o', dizzy: true }, { t: 1, eye: 'x', mouth: 'o', dizzy: true }], next: 'm' },
+        { id: 'r10', t: 'say', text: '稳稳走完!', fx: 'sparkle', ms: 1200 },
+        { id: 'r11', t: 'platform', remove: 'rp' },
+        { id: 'r11b', t: 'wait', sec: 1.5, next: 'm' },
+        { id: 'b1', t: 'item', art: 'hotballoon', key: 'hb', at: 'near', scale: 1 },
+        { id: 'b2', t: 'say', text: '热气球出发!', ms: 1100, pose: { eye: 'happy' } },
+        { id: 'b3', t: 'take', key: 'hb', how: 'balloon' },
+        { id: 'b4', t: 'fly', to: 'top', sec: 3, then: 'hover' },
+        { id: 'b5', t: 'say', text: '好高呀~能看到整个屏幕!', ms: 1800, pose: { eye: 'wide' } },
+        { id: 'b6', t: 'fly', to: 'right', sec: 3, style: 'float' },
+        { id: 'b7', t: 'fx', kind: 'bubbles', n: 6 },
+        { id: 'b8', t: 'fly', to: 'left', sec: 4, style: 'float' },
+        { id: 'b9', t: 'fly', to: 'ground', sec: 3, then: 'land' },
+        { id: 'b10', t: 'item', remove: 'hb' },
+        { id: 'b11', t: 'say', text: '平安降落~', ms: 1200, next: 'm' },
+        { id: 'j1', t: 'say', text: '我要一口气蹦到屏幕顶!', ms: 1400 },
+        { id: 'j2', t: 'jump', h: 1 },
+        { id: 'j3', t: 'say', text: '咚!撞到头了…', pose: { eye: '><' }, fx: 'star', ms: 1200 },
+        { id: 'j4', t: 'platform', key: 'cl', x1: 0.4, x2: 0.62, y: 0.22, style: 'cloud' },
+        { id: 'j5', t: 'say', text: '那朵云看起来软软的~', ms: 1400 },
+        { id: 'j6', t: 'jump', to: 'plat', key: 'cl', at: 'center' },
+        { id: 'j7', t: 'say', text: '站到云上啦!', fx: 'heart', ms: 1500 },
+        { id: 'j8', t: 'platform', remove: 'cl' },
+        { id: 'j9', t: 'wait', sec: 1.5, next: 'm' },
+        { id: 'm', t: 'ask', text: '再看一个节目?', choices: [{ text: '再来!', next: 'c' }, { text: '够啦', next: 'Z' }] },
+        { id: 'Z', t: 'say', text: '谢谢观看!', fx: 'confetti', ms: 1500 },
+        { id: 'Z2', t: 'wear', hat: 'none' },
+        { id: 'Z3', t: 'end', text: '《马戏团》完~' }
+      ]
+    }
+  };
+
   S.lullaby = {
     title: '晚安小剧场', desc: '陪你放松一小会儿',
     script: {

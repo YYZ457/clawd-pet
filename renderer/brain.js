@@ -42,7 +42,7 @@
   }
 
   // ---------------------------------------------------------------- platforms
-  let plats = [], winList = [], domList = [], domStamp = 0;
+  let plats = [], winList = [], domList = [], domStamp = 0, extraPlats = [];
   let surfAcc = 0, lastSurfSay = 0, seenIds = null, lastWinReact = 0;
   let anchors = new Map();
 
@@ -86,6 +86,7 @@
         if (d.y2 && d.y2 - d.y >= 60 && d.y2 >= petH + 4 && d.y2 <= groundY - 8) L.push({ key: 'e' + d.id, kind: 'e', x1: Math.max(0, d.x1), x2: Math.min(W, d.x2), y: d.y2, ax: d.x1, ay: d.y2 });
       }
     }
+    for (const e of extraPlats) L.push({ key: e.key, kind: 'p', x1: e.x1, x2: e.x2, y: e.y, ax: e.x1, ay: e.y });    // 剧情里凭空造出来的平台(钢丝/木板/云…)
     const newA = new Map();
     for (const p of L) if (!newA.has(p.key)) newA.set(p.key, { ax: p.ax, ay: p.ay });
 
@@ -105,6 +106,8 @@
     }
   }
 
+  function setExtraPlats(list) { extraPlats = (list || []).slice(0, 8); rebuild(); }
+  function platBelow(px, y) { let best = plats[0]; for (const p of plats) if (px >= p.x1 && px <= p.x2 && p.y >= y - 2 && (!best || p.y < best.y || best.y < y - 2)) best = p; return best; }
   function findLanding(px, y0, y1) {
     let best = null;
     for (const p of plats) {
@@ -977,6 +980,28 @@
     return { vx, vy: vy0, tag: 'jump' };
   }
 
+  /** 任意高度的大跳。spec: {h: 0~1 屏幕高度比例, dx: -1~1, to: 'plat'|'cursor'|'left'|'right', key, at} */
+  function bigJump(sp) {
+    if (!P.plat || P.mode !== 'story') return false;
+    const G = G0 * k, top = petH + 6 * S, maxVx = 650 * k;
+    let vx = 0, apex, tgt = null;
+    if (sp.to === 'plat') {
+      tgt = plats.find(q => q.key === 'p' + sp.key); if (!tgt) return false;
+      const m = petW * 0.5, lx = sp.at === 'left' ? tgt.x1 + m : sp.at === 'right' ? tgt.x2 - m : (tgt.x1 + tgt.x2) / 2;
+      apex = Math.max(top, Math.min(P.y, tgt.y) - 46 * k);
+      const vy0 = -Math.sqrt(2 * G * Math.max(20 * k, P.y - apex)), T = (-vy0 + Math.sqrt(vy0 * vy0 + 2 * G * (tgt.y - P.y))) / G;
+      vx = clamp((lx - P.x) / T, -maxVx, maxVx);
+      P.face = sign(vx || P.face); setMode('crouch', { vx, vy: vy0, tag: 'hop' }); return true;
+    }
+    if (sp.to === 'cursor') { apex = clamp(cur.y - 30 * k, top, P.y - 30 * k); vx = 0; }
+    else apex = clamp(P.y - (sp.h || 0.4) * H, top, P.y - 24 * k);
+    const vy0 = -Math.sqrt(2 * G * Math.max(20 * k, P.y - apex)), T = 2 * (-vy0) / G;   // 落回同一高度的总时间
+    if (sp.to === 'cursor') vx = clamp((cur.x - P.x) / T, -maxVx, maxVx);
+    else if (sp.to === 'left') vx = -260 * k; else if (sp.to === 'right') vx = 260 * k; else vx = (sp.dx || 0) * 320 * k;
+    if (vx) P.face = sign(vx);
+    setMode('crouch', { vx, vy: vy0, tag: 'hop' }); return true;
+  }
+
   // ---------------------------------------------------------------- 二维导航(躲猫猫 / 追鼠标 / 跳到别的窗口)
   // 把所有平台当成一张图:能跳上去/跳下去就连一条边,BFS 找到离目标最近的平台,再一跳一跳过去。
   const NAV = { hops: 0, leaped: false, bad: new Set(), moving: false, route: null };
@@ -1355,11 +1380,12 @@
       pose.armL = [1, -6 + (f > 0 ? 1 : 0), 3]; pose.armR = [1, -6 + (f > 0 ? 0 : 1), 3];
     }
     if (P.shiny && !pose.hat) pose.hat = 'crown';
+    Director.draw(ctx, u, dpr, touch, 'back');
     Rig.drawPet(ctx, u, P.x * dpr, P.y * dpr, pose, P.face);
     touch(P.x - 26 * S, P.y - 44 * S, P.x + 26 * S, P.y + 8 * S);
     if (crit.on) { Rig.drawCritter(ctx, u, dpr, crit, now); touch(crit.x - 24, crit.y - 34, crit.x + 24, crit.y + 12); }
     if (ball.on) { Rig.drawBall(ctx, u, dpr, ball); touch(ball.x - 20, ball.y - 30, ball.x + 20, ball.y + 10); }
-    for (const q of Director.itemParticles()) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
+    Director.draw(ctx, u, dpr, touch, 'front');
     for (const q of fx) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
     prevBox = box;
     updateHitbox();
@@ -1376,7 +1402,7 @@
     globalUpdate(dt);
     const beh = B[P.mode]; if (beh && beh.update) beh.update(dt);
     // 地面兜底
-    if (!AIR.has(P.mode) && P.mode !== 'air' && P.mode !== 'flip' && !P.plat && P.mode !== 'crouch') startFall(0, 0);
+    if (!AIR.has(P.mode) && P.mode !== 'air' && P.mode !== 'flip' && !P.plat && P.mode !== 'crouch' && !P.fly) startFall(0, 0);
     updateFx(dt); updateBall(dt); updateBubble(dt);
     render();
     requestAnimationFrame(frame);
@@ -1454,6 +1480,8 @@
     P, cur, ball, S: () => S, k: () => k, petW: () => petW, W: () => W, now: () => now,
     setMode, say, sayStory, hideBubble, spawn, hearts, stars, confetti, dust, note, ztext, decide,
     H: () => H, overPet, typing: () => isTyping(), navStep, navReset, navPick, navMoving: () => NAV.moving,
+    groundY: () => groundY, petH: () => petH, u: () => u, startFall, attachTo: pl => { attach(pl); }, platBelow, setExtraPlats, bigJump,
+    findPlat: key => plats.find(q => q.key === key) || null, plats: () => plats,
     genAbort: api && api.genAbort ? () => api.genAbort() : null,
     askText: api && api.askText ? q => api.askText(q) : null,
     llmContinue: api && api.llmContinue ? st => api.llmContinue(st) : null,
