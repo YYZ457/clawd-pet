@@ -88,6 +88,27 @@
   def('signpost', ['.NNNNNNNNNN.', 'NNLLLLLLLLNN', 'NNLLLLLLLLNN', '.NNNNNNNNNN.', '.....nn.....', '.....nn.....', '.....nn.....', '.....nn.....', '.....nn.....', '.....nn.....', '.....nn.....']);
   def('box', ['NNNNNNNN', 'NnnNNnnN', 'NnNnnNnN', 'NNnNNnNN', 'NNnNNnNN', 'NnNnnNnN', 'NnnNNnnN', 'NNNNNNNN']);
 
+  // ---------------- 能骑 / 能拿 / 能玩的(v1.5)
+  def('broom', ['.yYY..................', 'yYYYYn................', 'YYYYYnNNNNNNNNNNNNNNNN', 'yYYYYn................', '.yYY..................'], 'c');
+  def('skateboard', ['.RRRRRRRRRRRR.', 'RRrrrrrrrrrrRR', '..ss......ss..', '..KK......KK..']);
+  def('surfboard', ['...MMMMMMMMMMM....', '.MMWWWWWWWWWWWMMM.', 'MMMMMMMMMMMMMMMMMm', '.mmmmmmmmmmmmmmm..']);
+  def('carpet', ['Y.PPPPPPPPPPPPPPPP.Y', '.PPYPPYPPYPPYPPYPPP.', '.PPPPPPPPPPPPPPPPPP.', 'Y.pppppppppppppppp.Y']);
+  def('seat', ['NNNNNNNNNNNN', 'nnnnnnnnnnnn']);
+  def('parachute', ['.....RRRRRR.....', '...RRWWRRWWRR...', '..RRRWWRRWWRRR..', '.RRRRWWRRWWRRRR.', 'RRrRRrRRrRRrRRrR', 's..............s', '.s............s.', '..s..........s..', '...s........s...', '....s......s....', '.....s....s.....', '......s..s......', '.......ss.......']);
+  def('cannon', ['...........DD.', '..........DDDD', '.........DDDDD', '........DDDDD.', '.......DDDDD..', '......DDDDD...', '.....DDDDD....', '...NNDDDD.....', '..NnnNDD......', '.NnNNnN.......', '.NnNNnN.......', '..NnnN........']);
+  def('rod', ['...........s', '..........s.', '.........s..', '........N...', '.......N....', '......N.....', '.....N......', '....N.......', '...N........', '..nN........', '..nn........', '.n..........']);
+  def('car', ['....RRRRRR......', '...RcccRccR.....', '..RcccRcccRR....', '.RRRRRRRRRRRRRR.', 'RRRRRRRRRRRRRRRY', 'RRRRRRRRRRRRRRRR', 'rrKKKrrrrrrKKKrr', '..KSK......KSK..', '...K........K...']);
+  def('paperplane', ['WW..........', 'wWWW........', '.wWWWWW.....', '..wwWWWWWWWW', '...wwwwWW...', '....ww......'], 'c');
+  def('snowball', ['.WWW.', 'WWWWW', 'WWWWw', 'wWWww', '.www.'], 'c');
+  def('snowman', ['....KK....', '...KKKK...', '..KKKKKK..', '...WWWW...', '..WKWWKW..', '..WWOOWW..', '...WWWW...', '..RRRRRRR.', '.WWWWWWWW.', '.WWWKWWWW.', 'WWWWWWWWWW', 'WWWWKWWWWW', 'WWWWWWWWWW', 'wWWWWWWWWw', '.wwwwwwww.']);
+  def('apple', ['...n...', '...nG..', '.RRnRR.', 'RRWRRRR', 'RWRRRRR', 'RRRRRRr', '.RRRRr.', '..RRr..'], 'c');
+  def('ball', ['..RRW..', '.RRRWW.', 'RRRWWWB', 'YYYYBBB', 'YYYBBBB', '.YYBBB.', '..YBB..'], 'c');
+  def('bucket', ['.s....s.', 's......s', 'SSSSSSSS', '.BBBBBB.', '.BBBBBB.', '.bBBBBb.', '..bbbb..']);
+  def('planet', ['......PPPP......', '....PPPPPPPP....', 'YY.PPMPPPPPPP.YY', '.YYYPPPPPPPPYYY.', '..YYYYYYYYYYYY..', '...PPPPPPPPPP...', '....pPPPPPPp....', '......pppp......'], 'c');
+  def('cat', ['.......K.K', 'K......KKK', 'K......KYK', '.KKKKKKKKK', '.KKKKKKKK.', '.KKKKKKK..', '.K.K..K.K.', '.K.K..K.K.']);
+  def('ghost', ['...WWW...', '..WWWWW..', '.WWWWWWW.', '.WKWWKWW.', '.WKWWKWW.', '.WWWWWWW.', 'WWWMMWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'W.WW.WW.W'], 'c');
+  def('chick', ['..YYY..', '.YYKYY.', '.YYYYOO', 'YYYYYY.', 'YYYYYY.', '.YYYY..', '..O.O..']);
+
   const names = Object.keys(lib);
 
   // ---------------- 规范化 / 绘制

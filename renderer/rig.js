@@ -50,6 +50,7 @@ const Rig = (() => {
     const rx = v => Math.round(v * u);
     ctx.save();
     ctx.translate(Math.round(px), Math.round(py));
+    if (p.alpha != null && p.alpha < 1) { if (p.alpha <= 0.01) { ctx.restore(); return; } ctx.globalAlpha = p.alpha; }
 
     // 影子(不受翻转/旋转影响)
     if (p.shadow > 0.02) {

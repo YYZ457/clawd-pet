@@ -1,14 +1,17 @@
 'use strict';
 /* 剧本(剧情 / 自创动作)的格式定义与"消毒":大模型输出的只是数据,必须先过这里才允许播放。
    既在渲染进程使用,也能在 Node 里测试(UMD)。
-   v2:节点从 13 种扩到 21 种(变量/条件/随机/循环/多道具/换装/滤镜/二维追逐…),上限从 24 个放宽到 160 个。 */
+   v2:节点从 13 种扩到 21 种(变量/条件/随机/循环/多道具/换装/滤镜/二维追逐…),上限从 24 个放宽到 160 个。
+   v4:通用"积木"——motion(宠物/道具沿任意路径、圆弧运动,可叠加蹦跳/摇摆/旋转/拖尾)、shape(线/矩形/圆/彩虹,
+       端点能绑在宠物手上或道具上)、take 的任意挂点(手/双手/头/背/身前/脚下骑着)、多帧 sprite、整体缩放与透明。
+       目标是让模型自己"组合"出动作,而不是只能调用写死的几个。 */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.ScriptTools = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   const MAX_NODES = 160;
   const ACTS = ['wave', 'dance', 'cheer', 'spin', 'flip', 'stretch', 'bow', 'hiccup', 'sneeze', 'moonwalk', 'sit', 'read', 'coffee', 'cookie', 'laptop', 'hop', 'love', 'trip', 'doze', 'startle', 'critter', 'party', 'ball', 'pounce', 'poke', 'ouch', 'notice'];
-  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall'];
+  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall', 'motion', 'shape'];
   const ENUM = {
     eye: ['open', 'happy', 'closed', 'wide', 'angry', 'sad', 'x', 'heart', 'dots', '><'],
     mouth: ['smile', 'o', 'big', 'yawn', 'frown', 'flat', 'cat', 'munch'],
@@ -17,13 +20,21 @@
     hat: ['santa', 'party', 'crown', 'bow', 'nightcap', 'pumpkin', 'redcap'],
     glasses: ['shades']
   };
-  const NUM = { lift: [0, 6], dy: [-4, 4], sx: [0.5, 1.5], sy: [0.5, 1.5], rot: [-3.2, 3.2], ex: [-1, 1], ey: [-1, 1], blush: [0, 1], blink: [0, 1] };
+  const NUM = { lift: [0, 12], dy: [-4, 4], sx: [-1.6, 1.6], sy: [0.4, 1.6], rot: [-6.3, 6.3], ex: [-1, 1], ey: [-1, 1], blush: [0, 1], blink: [0, 1], size: [0.3, 3], alpha: [0, 1] };
   const FX = ['heart', 'star', 'note', 'confetti', 'dust', 'zzz', 'text', 'question', 'exclaim', 'sweat', 'anger', 'sparkle', 'snow', 'rain', 'fireworks', 'bubbles'];
   const WAITS = ['pet', 'click', 'near', 'far', 'throw', 'tickle', 'hover', 'grab', 'still', 'move', 'left', 'right', 'top', 'bottom', 'type'];
   const MOVES = ['left', 'right', 'center', 'cursor', 'item', 'up', 'down', 'window', 'ground', 'plat', 'point'];
   const PLAT_STYLES = ['rope', 'plank', 'cloud', 'ledge', 'ice', 'beam'];
   const ANIMS = ['none', 'bob', 'float', 'spin', 'swing', 'pulse', 'blink', 'drift'];
   const TAKES = ['head', 'hold', 'balloon', 'back'];
+  const TAKE_AT = ['head', 'hand', 'hands', 'back', 'front', 'under'];
+  const PACES = ['smooth', 'linear', 'in', 'out', 'each'];
+  const THENS = ['stay', 'land', 'fall', 'back'];
+  const FACES = ['auto', 'left', 'right', 'keep'];
+  const TRAILS = ['dust', 'smoke', 'fire', 'star', 'sparkle', 'heart', 'note', 'bubbles', 'snow', 'speed'];
+  const SHAPES = ['line', 'rect', 'circle', 'arc'];
+  const ANCHORS = ['pet', 'hand', 'handL', 'hands', 'head', 'feet'];
+  const COLORS = { red: '#e04b4b', orange: '#f2994a', yellow: '#f6c945', green: '#4caf50', blue: '#4f8fe0', sky: '#8fd3ff', water: '#3d9be9', purple: '#b06fd6', pink: '#ff8fb8', brown: '#8b5a3c', wood: '#a8733f', gray: '#9aa3ad', grey: '#9aa3ad', white: '#ffffff', black: '#2b211c', gold: '#f6c945', rope: '#c9a46a', grass: '#5fbf5f', snow: '#f4f8ff', ice: '#bfe9ff' };
   const FLY_TO = ['top', 'bottom', 'ground', 'left', 'right', 'center', 'cursor', 'up', 'down', 'point'];
   const FLY_STYLE = ['float', 'dash', 'bounce'];
   const FLY_THEN = ['hover', 'fall', 'land'];
@@ -38,6 +49,29 @@
   const num = (v, a, b, d) => { v = Number(v); return Number.isFinite(v) ? clamp(v, a, b) : d; };
   const str = (v, n) => (typeof v === 'string' || typeof v === 'number' ? String(v).replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, n) : '');
   const key = (v, n = 10) => str(v, n).replace(/[^\w一-龥]/g, '');
+
+  const color = (v, d) => { if (typeof v !== 'string') return d; const t = v.trim().toLowerCase(); if (/^#[0-9a-f]{6}$/.test(t)) return t; if (/^#[0-9a-f]{3}$/.test(t)) return '#' + t[1] + t[1] + t[2] + t[2] + t[3] + t[3]; return COLORS[t] || d; };
+  const pair = (p, lo, hi, lo2, hi2) => {
+    let x, y;
+    if (Array.isArray(p)) { x = Number(p[0]); y = Number(p[1]); }
+    else if (p && typeof p === 'object') { x = Number(p.x != null ? p.x : p.dx); y = Number(p.y != null ? p.y : p.dy); }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [clamp(x, lo, hi), clamp(y, lo2 == null ? lo : lo2, hi2 == null ? hi : hi2)];
+  };
+  /** shape 的端点:[x,y] 屏幕比例,或绑定到宠物身体部位 / 某个道具(可加 .top .bottom .left .right .tip) */
+  function point(v) {
+    if (typeof v === 'string') {
+      const t = v.trim(); if (ANCHORS.includes(t)) return t;
+      const m = /^([\w一-龥]{1,8})(?:\.(top|bottom|left|right|tip|center))?$/.exec(t); return m ? m[1] + (m[2] ? '.' + m[2] : '') : null;
+    }
+    return pair(v, -0.2, 1.2);
+  }
+  function rowsOf(a) {
+    if (!Array.isArray(a)) return null;
+    const rows = a.slice(0, 24).map(r => String(r == null ? '' : r).replace(/[\u0000-\u001f\u007f\s]/g, '.').slice(0, 24));
+    return rows.length >= 2 && rows.some(r => /[^.]/.test(r)) ? rows : null;
+  }
+  function keyframes(a) { return a.slice(0, 24).map(k => Object.assign({ t: num(k && k.t, 0, 1, 0) }, pose(k))).sort((x, y) => x.t - y.t); }
 
   function pose(o) {
     const out = {};
@@ -79,7 +113,7 @@
       case 'anim': {
         if (!Array.isArray(n.keys) || !n.keys.length) return null;
         c.dur = num(n.dur, 0.2, 20, 1.5);
-        c.keys = n.keys.slice(0, 24).map(k => Object.assign({ t: num(k && k.t, 0, 1, 0) }, pose(k))).sort((a, b) => a.t - b.t);
+        c.keys = keyframes(n.keys);
         if (n.hold) c.hold = true;
         if (n.loop != null) c.loop = Math.round(num(n.loop, 1, 8, 1));
         break;
@@ -106,7 +140,20 @@
           const k = key(n.key, 8); if (k) c.key = k;
         }
         break;
-      case 'take': if (n.key != null) c.key = key(n.key, 8); c.how = TAKES.includes(n.how) ? n.how : 'head'; break;
+      case 'take': {
+        if (n.key != null) c.key = key(n.key, 8);
+        // 旧写法 how:head|hold|balloon|back → 新写法 at:挂点
+        const how = TAKES.includes(n.how) ? n.how : '';
+        c.at = TAKE_AT.includes(n.at) ? n.at : how === 'hold' ? 'hand' : how === 'balloon' ? 'hands' : how || 'head';
+        c.how = how || c.at;
+        if (how === 'balloon' || n.line) c.line = true;
+        if (n.dx != null) c.dx = num(n.dx, -80, 80, 0);
+        if (n.dy != null) c.dy = num(n.dy, -80, 80, 0);
+        if (n.rot != null) c.rot = num(n.rot, -6.3, 6.3, 0);
+        if (n.sink != null) c.sink = num(n.sink, 0, 1, 0.45);
+        if (n.layer === 'back' || n.layer === 'front') c.layer = n.layer;
+        break;
+      }
       case 'put': break;
       case 'wear': {
         for (const k of ['hat', 'glasses', 'prop']) { if (n[k] === 'none') c[k] = 'none'; else if (ENUM[k].includes(n[k])) c[k] = n[k]; }
@@ -141,9 +188,10 @@
       case 'continue': c.hint = str(n.hint, 120); break;
       case 'end': c.text = str(n.text, 50); break;
       case 'sprite': {
-        const name = key(n.name, 8); if (!name || !Array.isArray(n.rows)) return null;
-        const rows = n.rows.slice(0, 24).map(r => String(r == null ? '' : r).replace(/[\u0000-\u001f\u007f\s]/g, '.').slice(0, 24));
-        if (rows.length < 2 || !rows.some(r => /[^.]/.test(r))) return null;
+        const name = key(n.name, 8); if (!name) return null;
+        const frames = Array.isArray(n.frames) ? n.frames.slice(0, 4).map(rowsOf).filter(Boolean) : [];
+        const rows = rowsOf(n.rows) || frames[0]; if (!rows) return null;
+        if (frames.length > 1) { c.frames = frames; c.fps = num(n.fps, 1, 12, 4); }
         const pal = {};
         if (n.pal && typeof n.pal === 'object' && !Array.isArray(n.pal)) {
           let cnt = 0; for (const ch of Object.keys(n.pal)) { if ([...ch].length !== 1 || ch === '.' || cnt >= 12) continue; const v = String(n.pal[ch]); if (/^#[0-9a-fA-F]{6}$/.test(v)) { pal[ch] = v; cnt++; } }
@@ -167,9 +215,59 @@
       case 'jump':
         c.h = n.h === 'top' ? 1 : num(n.h, 0.05, 1, 0.4); c.to = JUMP_TO.includes(n.to) ? n.to : '';
         if (n.key != null) c.key = key(n.key, 8); c.at = AT3.includes(n.at) ? n.at : 'center'; c.dx = num(n.dx, -1, 1, 0);
+        if (n.spin) c.spin = true;
         if (c.to === 'plat' && !c.key) c.to = '';
         break;
       case 'fall': break;
+      case 'motion': {
+        c.who = key(n.who, 8) || 'pet';
+        c.sec = num(n.sec, 0.3, 20, 2);
+        c.rel = !!n.rel;
+        if (Array.isArray(n.path)) {
+          const pts = n.path.slice(0, 16).map(p => (c.rel ? pair(p, -40, 40) : pair(p, -0.1, 1.1, 0.02, 1))).filter(Boolean);
+          if (pts.length) c.path = pts;
+        }
+        if (n.orbit && typeof n.orbit === 'object') {
+          const o = n.orbit, ob = { r: num(o.r, 0.3, 40, 4) };
+          if (o.x != null || o.y != null) { ob.x = num(o.x, -0.1, 1.1, 0.5); ob.y = num(o.y, -0.1, 1.1, 0.3); }
+          else { ob.dx = num(o.dx, -40, 40, 0); ob.dy = num(o.dy, -40, 40, -4); }
+          const a = (Array.isArray(o.a) ? o.a : [0, 360]).slice(0, 16).map(Number).filter(Number.isFinite).map(v => clamp(v, -1440, 1440));
+          ob.a = a.length >= 2 ? a : [0, 360];
+          c.orbit = ob; delete c.path;
+        }
+        c.pace = PACES.includes(n.pace) ? n.pace : (c.orbit ? 'each' : 'smooth');
+        if (n.hop != null) c.hop = num(n.hop, 0, 10, 0);
+        if (n.sway && typeof n.sway === 'object') c.sway = { x: num(n.sway.x, 0, 12, 0), y: num(n.sway.y, 0, 12, 0), f: num(n.sway.f, 0.1, 6, 1) };
+        if (n.spin != null) c.spin = num(n.spin, -10, 10, 0);
+        if (n.tilt != null) c.tilt = num(n.tilt, 0, 1, 0);
+        if (n.grow != null) c.grow = num(n.grow, 0.3, 3, 1);
+        c.face = FACES.includes(n.face) ? n.face : 'auto';
+        if (Array.isArray(n.keys) && n.keys.length) c.keys = keyframes(n.keys);
+        if (TRAILS.includes(n.trail)) c.trail = n.trail;
+        if (THENS.includes(n.then)) c.then = n.then;
+        if (n.async) c.async = true;
+        break;
+      }
+      case 'shape': {
+        if (n.remove) { c.remove = n.remove === true ? true : (key(n.remove, 8) || true); break; }
+        c.key = key(n.key, 8) || 'sh';
+        c.kind = SHAPES.includes(n.kind) ? n.kind : (n.r != null && n.to == null ? 'circle' : 'line');
+        c.from = point(n.from) || [0.3, 0.5];
+        const to = point(n.to); if (to) c.to = to;
+        if ((c.kind === 'line' || c.kind === 'rect') && !c.to) return null;
+        c.color = color(n.color, c.kind === 'line' ? '#8b5a3c' : '#4f8fe0');
+        if (Array.isArray(n.colors)) { const cs = n.colors.slice(0, 8).map(x => color(x, '')).filter(Boolean); if (cs.length) c.colors = cs; }
+        c.w = num(n.w, 0.3, 40, c.kind === 'arc' ? 2 : 1);
+        if (n.r != null) c.r = num(n.r, 0.2, 60, 3);
+        if (n.sag != null) c.sag = num(n.sag, -20, 20, 0);
+        c.alpha = num(n.alpha, 0.05, 1, 1);
+        c.fill = n.fill == null ? c.kind !== 'line' : !!n.fill;
+        c.layer = n.layer === 'front' ? 'front' : 'back';
+        if (n.dash) c.dash = true;
+        if (n.solid && c.kind === 'rect') c.solid = true;
+        if (n.wave) c.wave = true;
+        break;
+      }
     }
     return c;
   }
@@ -228,5 +326,5 @@
     return false;
   }
 
-  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES, PLAT_STYLES, ANIMS, TAKES, FLY_TO, FLY_STYLE, FLY_THEN, JUMP_TO };
+  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES, PLAT_STYLES, ANIMS, TAKES, FLY_TO, FLY_STYLE, FLY_THEN, JUMP_TO, TAKE_AT, PACES, THENS, TRAILS, SHAPES, ANCHORS, color, point };
 });

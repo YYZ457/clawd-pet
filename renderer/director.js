@@ -2,7 +2,11 @@
 /* 导演:把"剧本"(内置的,或大模型写的 JSON)演出来。
    剧本只是数据:每个节点类型都在白名单里,数值有范围,文字会被截断;这里不执行任何模型生成的代码。
    v1.3:流式剧本(节点边到边演)、变量/条件/随机/循环、多道具、换装、氛围滤镜、二维追逐。
-   v1.4:像素道具(内置道具库 + 模型自己设计的像素图)、凭空造平台(钢丝/木板/云…)、飞行(抓着气球)、任意高度大跳。 */
+   v1.4:像素道具(内置道具库 + 模型自己设计的像素图)、凭空造平台(钢丝/木板/云…)、飞行(抓着气球)、任意高度大跳。
+   v1.5:通用积木,不再为某个具体动作写死代码——
+     motion  宠物或任何道具沿任意路径 / 圆弧运动,叠加蹦跳、摇摆、旋转、顺势倾斜、拖尾、变大变小,可以同时进行(async)
+     shape   线 / 矩形 / 圆 / 彩虹;端点可以绑在宠物的手、头、脚或某个道具上,于是绳子、钓线、风筝线会跟着动
+     take    道具挂在身体任意部位(手、双手举过头、头、背、身前、脚下骑着),位置跟着姿态和翻滚走 */
 (() => {
   const ST = ScriptTools, Pr = window.Props;
   let A = null;                       // brain 提供的接口
@@ -11,9 +15,12 @@
   let holdPose = null, animState = null, items = [], think = null, chipsEl = null, tintEl = null;
   let stream = null, steps = 0, loops = {}, wear = null, savedLook = null, carry = null, itemSeq = 0;
   let sprites = {}, platforms = {}, hov = null, flyS = null;
+  let shapes = {}, movers = [], lastPose = null, petSize = 1;
   const MAX_STEPS = 1500, MAX_SEG = 8;
   const INTERRUPT = new Set(['air', 'grab', 'petted', 'poke', 'ouch', 'tickle', 'dizzy', 'hold', 'startle', 'land', 'crouch', 'love', 'trip']);
-  const DEF = { lift: 0, dy: 0, sx: 1, sy: 1, rot: 0, ex: 0, ey: 0, blush: 0, blink: 0, armL: [0, 0, 3], armR: [0, 0, 3] };
+  const DEF = { lift: 0, dy: 0, sx: 1, sy: 1, rot: 0, ex: 0, ey: 0, blush: 0, blink: 0, armL: [0, 0, 3], armR: [0, 0, 3], size: 1, alpha: 1 };
+  const DEFP = { lift: 0, dy: 0, sx: 1, sy: 1, rot: 0, armL: [0, 0, 3], armR: [0, 0, 3], legs: 'stand' };
+  const BODY_ANCH = new Set(['pet', 'hand', 'handL', 'hands', 'head', 'feet', 'back']);
   const G = ['✻', '✽', '✶', '✳', '✢', '·'], V = ['Cogitating', 'Pondering', 'Noodling', 'Percolating', 'Scampering'];
   const TINT = { night: [20, 30, 90], sunset: [255, 140, 60], forest: [40, 140, 70], ocean: [40, 120, 200], rose: [255, 100, 160], gold: [255, 200, 60], dusk: [120, 70, 160] };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -29,7 +36,7 @@
   D.busy = () => active || !!think;
   D.state = () => ({
     active, node: node && node.id, type: node && node.t, vars, title: meta.title, seg: meta.seg, log: meta.log, items: items.map(i => i.key), think: !!think,
-    n: nodes.length, streaming: !!(stream && stream.open), carry: carry && carry.key, steps, platforms: Object.keys(platforms), sprites: Object.keys(sprites), flying: !!(A && A.P.fly), fly: flyS ? { phase: flyS.phase, t: +flyS.t.toFixed(2), then: flyS.then } : null,
+    n: nodes.length, streaming: !!(stream && stream.open), carry: carry && carry.key, steps, platforms: Object.keys(platforms), sprites: Object.keys(sprites), shapes: Object.keys(shapes), movers: movers.length + (node && node.t === 'motion' && st.mv && !st.mv.done ? 1 : 0), size: +curSize().toFixed(2), pos: A ? [Math.round(A.P.x), Math.round(A.P.y)] : null, flying: !!(A && A.P.fly), fly: flyS ? { phase: flyS.phase, t: +flyS.t.toFixed(2), then: flyS.then } : null,
     choices: chipsEl && chipsEl.classList.contains('show') ? [...chipsEl.children].map(b => b.textContent) : []
   });
   D.chipsVisible = () => !!chipsEl && chipsEl.classList.contains('show');
@@ -40,8 +47,9 @@
     active = false; think = null; hideChips(); holdPose = null; animState = null; items = []; carry = null; stream = null; wear = null;
     restoreLook(); setTint({ color: 'none' });
     if (A && A.P.fly) { A.P.fly = false; flyS = null; hov = null; A.startFall(0, 0); }
-    flyS = null; hov = null; sprites = {};
-    if (Object.keys(platforms).length) { platforms = {}; pushPlats(); }    // 站在剧情平台上的话,收场时会自然掉下来
+    flyS = null; hov = null; sprites = {}; movers = []; petSize = 1;
+    const hadSolid = Object.values(shapes).some(q => q.solid); shapes = {};
+    if (Object.keys(platforms).length || hadSolid) { platforms = {}; pushPlats(); }    // 站在剧情平台上的话,收场时会自然掉下来
   }
   function reset(raw, opts) {
     nodes = []; byId = {}; idx = 0; node = null; st = { t: 0 };
@@ -153,6 +161,7 @@
   // ------------------------------------------------------------ 进入节点
   function enter(n) {
     if (n.fx) spawnFx({ kind: n.fx, n: n.fxn || 3 });
+    if (PET_CTRL.has(n.t) || (n.t === 'motion' && n.who === 'pet')) movers = movers.filter(m => !m.isPet);
     // 飞着的时候来了需要"站在平台上"的节点 → 先轻轻落地
     if (A.P.fly && (n.t === 'move' || n.t === 'jump' || n.t === 'act')) { endFly(); A.startFall(0, 0); }
     switch (n.t) {
@@ -173,7 +182,14 @@
       case 'put': ensureStory(); doPut(); st.dur = 0.4; return;
       case 'wear': ensureStory(); doWear(n); st.dur = 0.6; return;
       case 'tint': setTint(n); return nextOf(n);
-      case 'sprite': sprites[n.name] = { name: n.name, rows: n.rows, pal: n.pal, anchor: n.anchor }; return nextOf(n);
+      case 'sprite': sprites[n.name] = { name: n.name, rows: n.rows, pal: n.pal, anchor: n.anchor, fps: n.fps || 4, frames: n.frames ? n.frames.map(r => ({ rows: r, pal: n.pal, anchor: n.anchor })) : null }; return nextOf(n);
+      case 'shape': doShape(n); return nextOf(n);
+      case 'motion': {
+        ensureStory(); if (n.who === 'pet') animState = null;
+        const m = makeMover(n); if (!m) return nextOf(n);
+        if (n.async) { movers = movers.filter(q => q.n.who !== n.who); movers.push(m); return nextOf(n); }
+        st.mv = m; return;
+      }
       case 'platform': doPlatform(n); return nextOf(n);
       case 'fly': ensureStory(); startFly(n); return;
       case 'jump': ensureStory(); holdPose = null; st.phase = 0; return;
@@ -222,7 +238,11 @@
     if (st.t < 0) return;
     if (st.deferred) { st.deferred = false; st.t = 0; const nxt = enter(node); if (nxt !== undefined) go(nxt); return; }
     // 飞到一半被用户拎起来 / 扔出去 → 放弃飞行
-    if (A.P.fly && (A.P.mode === 'grab' || A.P.mode === 'air' || A.P.mode === 'hold')) { endFly(); if (node.t === 'fly') { adv(); return; } }
+    if (A.P.mode === 'grab' || A.P.mode === 'air' || A.P.mode === 'hold') {
+      if (A.P.fly) endFly();
+      if (movers.some(m => m.isPet)) movers = movers.filter(m => !m.isPet);
+      if (node.t === 'fly' || (node.t === 'motion' && st.mv && st.mv.isPet && !st.mv.done)) { if (st.mv) st.mv.done = true; adv(); return; }
+    }
     switch (node.t) {
       case '__wait': waitTick(); break;
       case 'say': if (st.t >= st.dur) { if (node.act) A.setMode('story'); adv(); } break;
@@ -236,13 +256,16 @@
       case 'move': doMove(dt); break;
       case 'fly': flyTick(dt); break;
       case 'jump': jumpTick(dt); break;
+      case 'motion': if (!st.mv) { adv(); break; } tickMover(st.mv, dt); if (st.mv.done) adv(); break;
       case 'ask': if (st.t > st.limit) { hideChips(); A.sayStory('……(你不在吗?)', 2200); meta.log.push('没回应'); if (node.timeout) jump(node.timeout); else endSoon(); } break;
       case 'wait_for': checkWait(dt); break;
       case 'ask_text': if (st.t > st.limit) { A.hideBubble(); vars[node.key] = '朋友'; adv(); } break;
       case 'continue': if (st.t > 120) { A.sayStory('(故事线断了…)', 2200); endSoon(); } break;
       case 'end': if (st.t >= st.dur) finish(); break;
     }
-    if (A.P.fly && node && node.t !== 'fly') hoverTick(dt);
+    if (movers.length) { for (const m of movers) tickMover(m, dt); movers = movers.filter(m => !m.done); }
+    if (A.P.fly && node && node.t !== 'fly' && !petMover()) hoverTick(dt);
+    for (const k in shapes) shapes[k].t += dt;
     updateItems(dt);
     ropeFx(dt);
   };
@@ -333,7 +356,7 @@
     const P = A.P, n = node, S = A.S();
     if (st.phase === 0) {
       if (P.mode !== 'story' || !P.plat) { if (st.t > 4) adv(); return; }
-      const sp = { h: n.h, dx: n.dx, to: n.to, key: n.key, at: n.at };
+      const sp = { h: n.h, dx: n.dx, to: n.to, key: n.key, at: n.at, spin: n.spin };
       st.phase = A.bigJump(sp) ? 1 : 2; st.t0 = st.t; return;
     }
     if (st.phase === 2) { adv(); return; }
@@ -345,8 +368,7 @@
   // ------------------------------------------------------------ 飞行(抓着气球…)
   function flyTarget(n) {
     const P = A.P, W = A.W(), H = A.H(), S = A.S(), pw = A.petW(), gy = A.groundY();
-    let ymin = A.petH() + 6 * S;
-    if (carry && carry.how === 'balloon') { const sp = resolveSpr(carry), nh = sp && Pr ? Pr.normalize(sp).h : 11; ymin = Math.max(ymin, 21 * S + nh * S * carry.scale + 4 * S); }   // 抓着气球飞,气球本身也得留在屏幕里
+    const ymin = topLimit();
     let x = P.x, y = P.y;
     switch (n.to) {
       case 'top': y = ymin + 6 * S; break;
@@ -394,13 +416,244 @@
     const P = A.P, S = A.S();
     if (!hov) hov = { x: P.x, y: P.y, t: 0 };
     hov.t += dt; P.legT += dt * 3.5;
+    if (hov.still) { P.x = hov.x; P.y = hov.y; return; }       // motion then:"stay" → 原地停住(荡秋千停在半空、坐在云上…)
     P.x = hov.x + Math.sin(hov.t * 1.3) * 5 * S; P.y = hov.y + Math.sin(hov.t * 2.1) * 2 * S;
+  }
+  /** 宠物在空中时最高能到哪(举过头顶的道具也要留在屏幕里) */
+  function topLimit() {
+    const S = A.S(); let ymin = A.petH() + 6 * S;
+    if (carry && carry.at === 'hands') { const sp = resolveSpr(carry), nh = sp && Pr ? Pr.normalize(sp).h : 11; ymin = Math.max(ymin, (carry.line ? 22 : 15) * S + nh * S * carry.scale + 4 * S); }
+    return Math.min(ymin, A.H() * 0.5);
+  }
+
+  // ------------------------------------------------------------ 万能运动:宠物或道具沿任意路径 / 圆弧移动
+  const PET_CTRL = new Set(['move', 'jump', 'fly', 'act', 'fall']);
+  const PACE = { smooth: ease, linear: t => t, in: t => t * t, out: t => 1 - (1 - t) * (1 - t), each: t => t };
+  const lineSeg = (a, b) => ({ len: Math.hypot(b[0] - a[0], b[1] - a[1]), f: s => [lerp(a[0], b[0], s), lerp(a[1], b[1], s)] });
+  function crSeg(p0, p1, p2, p3) {                                   // Catmull-Rom:穿过每个点的平滑曲线
+    const f = s => { const s2 = s * s, s3 = s2 * s, g = i => 0.5 * (2 * p1[i] + (p2[i] - p0[i]) * s + (2 * p0[i] - 5 * p1[i] + 4 * p2[i] - p3[i]) * s2 + (3 * p1[i] - p0[i] - 3 * p2[i] + p3[i]) * s3); return [g(0), g(1)]; };
+    let len = 0, q = p1; for (let i = 1; i <= 10; i++) { const r = f(i / 10); len += Math.hypot(r[0] - q[0], r[1] - q[1]); q = r; }
+    return { len, f };
+  }
+  function buildSegs(n, x0, y0) {
+    const W = A.W(), H = A.H(), ph = A.petH(), segs = [], start = [x0, y0];
+    if (n.orbit) {
+      const o = n.orbit, cx = o.x != null ? o.x * W : x0 + o.dx * ph, cy = o.y != null ? o.y * H : y0 + o.dy * ph, r = o.r * ph;
+      const at = a => [cx + r * Math.sin(a * Math.PI / 180), cy + r * Math.cos(a * Math.PI / 180)];   // 0°=圆心正下方 90°=右 180°=正上方
+      const first = at(o.a[0]);
+      if (Math.hypot(first[0] - x0, first[1] - y0) > 3) segs.push(lineSeg(start, first));
+      for (let i = 0; i + 1 < o.a.length; i++) { const a0 = o.a[i], a1 = o.a[i + 1]; segs.push({ len: Math.max(1, r * Math.abs(a1 - a0) * Math.PI / 180), f: s => at(a0 + (a1 - a0) * s) }); }
+      if (n.then === 'back') segs.push(lineSeg(at(o.a[o.a.length - 1]), start));
+    } else {
+      const pts = [start].concat((n.path || []).map(p => (n.rel ? [x0 + p[0] * ph, y0 + p[1] * ph] : [p[0] * W, p[1] * H])));
+      if (n.then === 'back') pts.push(start);
+      if (pts.length === 1) pts.push(start);
+      const curve = pts.length > 2 && n.pace !== 'each' && !n.hop;
+      for (let i = 0; i + 1 < pts.length; i++) segs.push(curve ? crSeg(pts[Math.max(0, i - 1)], pts[i], pts[i + 1], pts[Math.min(pts.length - 1, i + 2)]) : lineSeg(pts[i], pts[i + 1]));
+    }
+    return segs;
+  }
+  function makeMover(n) {
+    const P = A.P, isPet = n.who === 'pet';
+    let it = null;
+    if (isPet) { if (P.mode === 'grab' || P.mode === 'hold') return null; }
+    else { it = items.find(q => q.key === n.who); if (!it) return null; freeItem(it); movers = movers.filter(m => m.it !== it); }
+    const x0 = isPet ? P.x : it.x, y0 = isPet ? P.y : it.y;
+    const segs = buildSegs(n, x0, y0), total = segs.reduce((a, q) => a + q.len, 0) || 1;
+    const m = { n, isPet, it, segs, total, t: 0, dur: n.sec, x: x0, y: y0, vx: 0, vy: 0, phase: 1, spinR: 0, tilt: 0, u: 0, trailT: 0, size0: petSize, scale0: it ? it.scale : 1, startPlat: isPet ? P.plat : null };
+    if (isPet) { P.plat = null; P.platKey = null; P.vx = P.vy = 0; P.fly = true; hov = null; flyS = null; if (P.mode !== 'story') A.setMode('story'); }
+    return m;
+  }
+  function moverPos(m, u) {
+    const n = m.n, segs = m.segs, ph = A.petH();
+    let si = 0, s;
+    if (n.pace === 'each') { const q = u * segs.length; si = Math.min(segs.length - 1, Math.floor(q)); s = u >= 1 ? 1 : ease(q - si); }
+    else { let d = PACE[n.pace](u) * m.total; while (si < segs.length - 1 && d > segs[si].len) { d -= segs[si].len; si++; } s = segs[si].len > 0 ? clamp(d / segs[si].len, 0, 1) : 1; }
+    let [x, y] = segs[si].f(s);
+    if (n.hop) y -= n.hop * ph * Math.sin(Math.PI * s);
+    if (n.sway) { const tt = u * m.dur, env = clamp(Math.min(tt, m.dur - tt) / 0.4, 0, 1), w = tt * n.sway.f * Math.PI * 2; x += n.sway.x * ph * Math.sin(w) * env; y += n.sway.y * ph * Math.sin(w * 1.5 + 1.2) * env; }
+    return [x, y];
+  }
+  function tickMover(m, dt) {
+    if (m.done) return;
+    const P = A.P, S = A.S(), n = m.n;
+    if (m.phase === 1) {
+      m.t += dt; const u = clamp(m.t / m.dur, 0, 1);
+      let [x, y] = moverPos(m, u);
+      if (m.isPet) { x = clamp(x, A.petW() / 2, A.W() - A.petW() / 2); y = clamp(y, topLimit(), A.groundY()); }
+      else { x = clamp(x, -60, A.W() + 60); y = clamp(y, -60, A.H() + 60); }
+      const id = 1 / Math.max(dt, 1e-3);
+      m.vx = lerp(m.vx, (x - m.x) * id, 0.45); m.vy = lerp(m.vy, (y - m.y) * id, 0.45);
+      m.x = x; m.y = y; m.u = u;
+      m.spinR = (n.spin || 0) * Math.PI * 2 * (n.pace === 'each' ? u : PACE[n.pace](u));
+      if (n.tilt && Math.hypot(m.vx, m.vy) > 25) m.tilt = lerp(m.tilt, clamp(Math.atan2(m.vy, Math.abs(m.vx)) * n.tilt, -1.4, 1.4), 0.25);
+      const face = n.face || (m.isPet ? 'auto' : 'keep');
+      if (m.isPet) {
+        P.x = x; P.y = y; P.legT += dt * 6;
+        if (face === 'left') P.face = -1; else if (face === 'right') P.face = 1; else if (face === 'auto' && Math.abs(m.vx) > 40) P.face = sign(m.vx);
+      } else {
+        const it = m.it; it.x = x; it.y = y; it.rotM = m.spinR + m.tilt * (m.vx < 0 ? -1 : 1);
+        if (n.grow) it.scale = m.scale0 * lerp(1, n.grow, ease(u));
+        if (face === 'left') it.flip = true; else if (face === 'right') it.flip = false; else if (face === 'auto' && Math.abs(m.vx) > 40) it.flip = m.vx < 0;
+      }
+      if (n.trail) { m.trailT -= dt; if (m.trailT <= 0) { m.trailT = 0.06; const c = m.isPet ? anchor('pet') : itemPt(m.it, 'center'); trailFx(n.trail, c[0], c[1], m.vx, m.vy); } }
+      if (u >= 1) finishPath(m);
+    } else if (m.phase === 2) {                                    // 缓缓落到下面的平台
+      m.t += dt; const u = clamp(m.t / m.ldur, 0, 1), pl = m.land;
+      P.y = lerp(m.ly0, pl.y, ease(u)); P.x = m.lx0 + Math.sin(m.t * 2.4) * 3 * S * (1 - u); P.legT += dt * 4;
+      if (u >= 1) { P.fly = false; hov = null; P.x = clamp(P.x, pl.x1 + 4, pl.x2 - 4); A.attachTo(pl); A.dust(3); m.done = true; }
+    }
+  }
+  function autoThen(m) {
+    if (m.n.async) return 'land';
+    const ni = nextOf(node), nn = typeof ni === 'number' ? nodes[ni] : null;
+    if (nn && ((nn.t === 'motion' && nn.who === 'pet') || nn.t === 'fly' || nn.t === 'fall')) return 'stay';
+    return 'land';
+  }
+  function finishPath(m) {
+    const n = m.n, P = A.P, k = A.k();
+    if (!m.isPet) {
+      const it = m.it;
+      if (n.then === 'fall' || n.then === 'land') dropItem(it, n.then === 'fall' ? m.vx * 0.5 : 0, n.then === 'fall' ? m.vy * 0.5 : 0);
+      m.done = true; return;
+    }
+    if (n.grow) petSize = n.grow;
+    let then = n.then || autoThen(m);
+    if (then === 'back') then = m.startPlat ? 'land' : 'stay';
+    if (then === 'stay') { hov = { x: P.x, y: P.y, t: 0, still: true }; m.done = true; return; }
+    if (then === 'fall') { P.fly = false; hov = null; A.startFall(clamp(m.vx, -900 * k, 900 * k), clamp(m.vy, -1400 * k, 900 * k)); m.done = true; return; }
+    const pl = A.platBelow(P.x, P.y - 2);
+    if (!pl) { P.fly = false; A.startFall(0, 0); m.done = true; return; }
+    if (pl.y - P.y < 4) { P.fly = false; hov = null; A.attachTo(pl); m.done = true; return; }
+    m.phase = 2; m.t = 0; m.land = pl; m.ly0 = P.y; m.lx0 = P.x; m.ldur = clamp((pl.y - P.y) / (420 * k), 0.35, 1.6);
+  }
+  function petMover() {
+    if (node && node.t === 'motion' && st.mv && st.mv.isPet && !st.mv.done) return st.mv;
+    for (const m of movers) if (m.isPet && !m.done) return m;
+    return null;
+  }
+  function curSize() { const m = petMover(); return m && m.n.grow ? lerp(m.size0, m.n.grow, ease(m.u)) : petSize; }
+  function trailFx(kind, x, y, vx, vy) {
+    const sp = Math.hypot(vx, vy) || 1, bx = -vx / sp, by = -vy / sp, S = A.S();
+    const o = (extra) => Object.assign({ vx: bx * rnd(20, 60) + rnd(-12, 12), vy: by * rnd(20, 60) + rnd(-12, 12), life: rnd(0.5, 0.9), size: rnd(0.8, 1.4) }, extra);
+    switch (kind) {
+      case 'fire': A.spawn('dust', x + bx * 6 * S, y + by * 6 * S, o({ color: Math.random() < 0.5 ? '#ffb347' : '#ff6b3d', life: rnd(0.25, 0.5) })); break;
+      case 'smoke': A.spawn('dust', x + bx * 6 * S, y + by * 6 * S, o({ color: 'rgba(200,200,205,.8)', vy: -rnd(15, 40), life: rnd(0.8, 1.3), size: rnd(1.2, 2) })); break;
+      case 'speed': A.spawn('confetti', x + bx * 8 * S, y + rnd(-5, 5) * S, o({ color: 'rgba(255,255,255,.85)', rot: Math.atan2(vy, vx), vr: 0, life: 0.3 })); break;
+      case 'star': case 'sparkle': A.spawn(kind === 'star' ? 'star' : 'spark', x + rnd(-4, 4) * S, y + rnd(-4, 4) * S, o({ color: kind === 'star' ? '#ffd23f' : '#fff6a8' })); break;
+      case 'heart': if (Math.random() < 0.35) A.spawn('heart', x, y, o({ vy: -30 })); break;
+      case 'note': if (Math.random() < 0.3) A.note(); break;
+      case 'bubbles': if (Math.random() < 0.5) A.spawn('text', x + rnd(-4, 4) * S, y, { text: '○', color: '#bfe9ff', vx: rnd(-8, 8), vy: -rnd(20, 40), life: rnd(1, 1.6), size: rnd(0.8, 1.5), bold: true }); break;
+      case 'snow': A.spawn('confetti', x + rnd(-6, 6) * S, y, o({ color: '#ffffff', rot: rnd(0, 6), vr: rnd(-3, 3) })); break;
+      default: A.spawn('dust', x + bx * 4 * S, y + 4 * S, o({})); break;
+    }
+  }
+
+  // ------------------------------------------------------------ 身体挂点:跟着姿态、缩放、翻滚一起动
+  D.notePose = p => { lastPose = p; };
+  /** 说话气泡要躲开的"最高点":被抬高、变大、头顶/举着的道具都算(离得很远的风筝不算) */
+  D.topY = () => {
+    if (!A || (!active && !carry)) return null;
+    const S = A.S(); let top = anchor('head')[1] - (A.P.hat ? 4.5 * S : 0);
+    if (carry && carry.carried && carry.bx && (carry.at === 'head' || carry.at === 'hands' || carry.at === 'under') && carry.bx[1] > top - 45 * S) top = Math.min(top, carry.bx[1]);
+    return top;
+  };
+  D.__itemPos = k => { const it = items.find(q => q.key === k); return it ? itemPt(it, 'center') : null; };   // 测试用
+  function anchor(name) {
+    const P = A.P, S = A.S(), p = lastPose || DEFP, f = P.face;
+    const B = (p.legs === 'tuck' ? -1 : -3) + (p.dy || 0), aL = p.armL || DEFP.armL, aR = p.armR || DEFP.armR;
+    const handY = a => (a[1] < -2 ? B - 5 + a[1] : B - 5 + a[1] + a[2]);
+    let lx = 0, ly = B - 4;
+    switch (name) {
+      case 'hand': lx = 8 + aR[0]; ly = handY(aR); break;
+      case 'handL': lx = -(8 + aL[0]); ly = handY(aL); break;
+      case 'hands': lx = (aR[0] - aL[0]) / 2; ly = Math.min(handY(aL), handY(aR)); break;
+      case 'head': ly = B - 9; break;
+      case 'feet': ly = 0; break;
+      case 'back': lx = -7; ly = B - 3; break;
+    }
+    const th = (p.rot || 0) * f, c = Math.cos(th), sn = Math.sin(th), y0 = ly + 6;   // 绕身体中心(pivot 0,-6)旋转
+    const rx = lx * c - y0 * sn, ry = lx * sn + y0 * c - 6;
+    return [P.x + f * (p.sx || 1) * rx * S, P.y - (p.lift || 0) * S + (p.sy || 1) * ry * S];
+  }
+  function itemPt(it, part) {
+    const b = it.bx || [it.x - 10, it.y - 20, it.x + 10, it.y], cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    switch (part) {
+      case 'top': return [cx, b[1]];
+      case 'bottom': return [cx, b[3]];
+      case 'left': return [b[0], cy];
+      case 'right': return [b[2], cy];
+      case 'tip': return [it.flipD ? b[0] : b[2], b[1]];
+      default: return [cx, cy];
+    }
+  }
+  /** shape 端点 → 屏幕坐标 */
+  function spt(v) {
+    if (Array.isArray(v)) return [v[0] * A.W(), v[1] * A.H()];
+    if (BODY_ANCH.has(v)) return anchor(v);
+    const [k, part] = String(v).split('.'), it = items.find(q => q.key === k);
+    return it ? itemPt(it, part) : null;
+  }
+
+  // ------------------------------------------------------------ 形状(绳子 / 滑梯 / 水面 / 彩虹 / 圆…)
+  function doShape(n) {
+    if (n.remove) { const had = Object.values(shapes).some(q => q.solid); if (n.remove === true) shapes = {}; else delete shapes[n.remove]; if (had) pushPlats(); return; }
+    if (!shapes[n.key] && Object.keys(shapes).length >= 12) return;
+    shapes[n.key] = Object.assign({}, n, { t: 0 });
+    if (n.solid || Object.values(shapes).some(q => q.solid)) pushPlats();
+  }
+  const lighten = (hex, a) => { const v = parseInt(hex.slice(1), 16), r = v >> 16, g = (v >> 8) & 255, b = v & 255, m = x => Math.round(x + (255 - x) * a); return `rgb(${m(r)},${m(g)},${m(b)})`; };
+  function drawShape(ctx, dpr, touch, q, now) {
+    const a = spt(q.from); if (!a) return;
+    const b = q.to ? spt(q.to) : null, S = A.S(), ph = A.petH(), lw = Math.max(1, q.w * S);
+    ctx.save(); ctx.globalAlpha = q.alpha; ctx.strokeStyle = ctx.fillStyle = q.color; ctx.lineWidth = lw * dpr; ctx.lineJoin = 'round';
+    if (q.dash) ctx.setLineDash([3 * S * dpr, 2 * S * dpr]);
+    const X = v => v * dpr;
+    switch (q.kind) {
+      case 'line': {
+        if (!b) break;
+        ctx.beginPath(); ctx.moveTo(X(a[0]), X(a[1]));
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 + (q.sag || 0) * ph;
+        if (q.sag) ctx.quadraticCurveTo(X(mx), X(my), X(b[0]), X(b[1])); else ctx.lineTo(X(b[0]), X(b[1]));
+        ctx.stroke();
+        touch(Math.min(a[0], b[0], mx) - lw - 8, Math.min(a[1], b[1], my) - lw - 8, Math.max(a[0], b[0], mx) + lw + 8, Math.max(a[1], b[1], my) + lw + 8); break;
+      }
+      case 'rect': {
+        if (!b) break;
+        const x1 = Math.min(a[0], b[0]), x2 = Math.max(a[0], b[0]), y1 = Math.min(a[1], b[1]), y2 = Math.max(a[1], b[1]);
+        if (q.wave) {                                        // 波浪顶边(水面 / 海)
+          ctx.beginPath(); ctx.moveTo(X(x1), X(y2));
+          for (let x = x1; x <= x2 + 1; x += 3 * S) ctx.lineTo(X(Math.min(x, x2)), X(y1 + Math.sin(x * 0.045 + now * 2.6) * 1.4 * S + Math.sin(x * 0.11 - now * 1.7) * 0.6 * S));
+          ctx.lineTo(X(x2), X(y2)); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = lighten(q.color, 0.45); for (let x = x1 + 6 * S; x < x2 - 4 * S; x += 23 * S) ctx.fillRect(X(x + Math.sin(now + x) * 2 * S), X(y1 + 3 * S), X(5 * S), X(0.8 * S));
+        } else if (q.fill) { ctx.fillRect(X(x1), X(y1), X(x2 - x1), X(y2 - y1)); ctx.fillStyle = lighten(q.color, 0.3); ctx.fillRect(X(x1), X(y1), X(x2 - x1), X(Math.min(S, y2 - y1))); }
+        else ctx.strokeRect(X(x1), X(y1), X(x2 - x1), X(y2 - y1));
+        touch(x1 - lw - 6, y1 - 3 * S - lw, x2 + lw + 6, y2 + lw + 6); break;
+      }
+      case 'circle': {
+        const r = (q.r || 3) * ph; ctx.beginPath(); ctx.arc(X(a[0]), X(a[1]), X(r), 0, Math.PI * 2);
+        if (q.fill) ctx.fill(); else ctx.stroke();
+        touch(a[0] - r - lw - 4, a[1] - r - lw - 4, a[0] + r + lw + 4, a[1] + r + lw + 4); break;
+      }
+      case 'arc': {                                          // 半圆拱:彩虹 / 拱门 / 桥洞
+        const r = (q.r || 6) * ph, cs = q.colors || [q.color];
+        cs.forEach((col, i) => { ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(X(a[0]), X(a[1]), Math.max(1, X(r - (i + 0.5) * lw)), Math.PI, Math.PI * 2); ctx.stroke(); });
+        touch(a[0] - r - 6, a[1] - r - 6, a[0] + r + 6, a[1] + 6); break;
+      }
+    }
+    ctx.restore();
   }
 
   // ------------------------------------------------------------ 平台(钢丝 / 木板 / 云 / 石台…)
   function pushPlats() {
     const W = A.W(), H = A.H(), S = A.S(), ymin = A.petH() + 12, gy = A.groundY();
-    A.setExtraPlats(Object.values(platforms).map(p => { p.yy = clamp(p.y * H, ymin + 6 * S, gy - 20 * S); return { key: 'p' + p.key, x1: p.x1 * W, x2: p.x2 * W, y: p.yy }; }));
+    const list = Object.values(platforms).map(p => { p.yy = clamp(p.y * H, ymin + 6 * S, gy - 20 * S); return { key: 'p' + p.key, x1: p.x1 * W, x2: p.x2 * W, y: p.yy }; });
+    for (const q of Object.values(shapes)) {                // 实心矩形(solid)的顶边也能站
+      if (!q.solid || !Array.isArray(q.from) || !Array.isArray(q.to)) continue;
+      const x1 = Math.min(q.from[0], q.to[0]) * W, x2 = Math.max(q.from[0], q.to[0]) * W, y = clamp(Math.min(q.from[1], q.to[1]) * H, ymin + 6 * S, gy - 4 * S);
+      if (x2 - x1 > A.petW()) list.push({ key: 'ps_' + q.key, x1, x2, y });
+    }
+    A.setExtraPlats(list);
   }
   function doPlatform(n) {
     if (n.remove) { if (n.remove === true) platforms = {}; else delete platforms[n.remove]; pushPlats(); return; }
@@ -479,7 +732,28 @@
   }
 
   // ------------------------------------------------------------ 道具(内置像素图 / 模型自己画的像素图 / emoji)
-  const resolveSpr = it => it.art ? (sprites[it.art] || (Pr && Pr.get(it.art)) || (Pr && Pr.get('box'))) : null;
+  const resolveSpr = it => {
+    if (!it.art) return null;
+    const s = sprites[it.art];
+    if (s) return s.frames && s.frames.length > 1 ? s.frames[Math.floor(it.t * s.fps) % s.frames.length] : s;
+    return (Pr && Pr.get(it.art)) || (Pr && Pr.get('box'));
+  };
+  const sprH = it => { const sp = resolveSpr(it); return (sp && Pr ? Pr.normalize(sp).h : 6) * it.scale; };   // 道具高度(像素格)
+  /** 让道具变成"自由悬空"的坐标(x,y = 锚点位置) */
+  function freeItem(it) {
+    const sp = resolveSpr(it), anc = sp ? (sp.anchor || 'b') : 'c';
+    if (it.carried || it.bx) {
+      if (it.carried) { it.carried = false; if (carry === it) carry = null; }
+      if (it.bx) { it.x = (it.bx[0] + it.bx[2]) / 2; it.y = anc === 'c' ? (it.bx[1] + it.bx[3]) / 2 : it.bx[3]; }
+    } else if (!it.free && anc === 'c') it.y -= sprH(it) * A.S() / 2;
+    it.free = true; it.falling = false; it.vy = 0; it.vx = 0;
+  }
+  /** 道具掉下去(受重力,落在下面的平台上) */
+  function dropItem(it, vx, vy) {
+    freeItem(it);
+    const sp = resolveSpr(it); if (sp && (sp.anchor || 'b') === 'c') it.y += sprH(it) * A.S() / 2;
+    it.free = false; it.falling = true; it.vx = vx || 0; it.vy = vy || 0; it.rotM = 0;
+  }
   function addItem(n) {
     const P = A.P, pl = P.plat || { x1: 0, x2: A.W(), y: P.y }, pw = A.petW(), k = A.k(), S = A.S(), W = A.W(), H = A.H();
     let x, y = pl.y, free = false;
@@ -507,21 +781,39 @@
     let it = n.key ? items.find(q => q.key === n.key) : null;
     if (!it) { let best = null, bd = 1e9; for (const q of items) { if (q.carried) continue; const d = Math.abs(q.x - A.P.x) + Math.abs(q.y - A.P.y); if (d < bd) { bd = d; best = q; } } it = best; }
     if (!it) { A.spawn('text', A.P.x, A.P.y - 14 * A.S(), { text: '?', color: '#7ad0ff', bold: true, vy: -20, life: 1.2, size: 2.2 }); return; }
-    if (carry) carry.carried = false;
-    it.carried = true; it.how = n.how || 'head'; carry = it; A.hearts(1);
+    if (carry && carry !== it) { const old = carry; carry = null; if (A.P.plat && !A.P.fly) { old.carried = false; old.x = A.P.x - A.P.face * 30 * A.k(); old.y = A.P.y; old.free = false; old.bx = null; } else dropItem(old); }
+    movers = movers.filter(m => m.it !== it);
+    it.carried = true; it.falling = false; it.rotM = 0; it.how = n.how || n.at || 'head'; it.at = n.at || 'head'; it.line = !!n.line;
+    it.cdx = n.dx || 0; it.cdy = n.dy || 0; it.crot = n.rot || 0; it.sink = n.sink != null ? n.sink : 0.45; it.clayer = n.layer || '';
+    carry = it; A.hearts(1);
   }
-  function doPut() { if (!carry) return; carry.carried = false; carry.x = A.P.x + A.P.face * 40 * A.k(); carry.y = A.P.y; carry.free = false; carry = null; }
-  function updateItems(dt) { for (const it of items) it.t += dt; }
+  function doPut() {
+    if (!carry) return; const it = carry; carry = null;
+    if (A.P.fly || !A.P.plat) { dropItem(it); return; }        // 在空中松手 → 掉下去
+    it.carried = false; it.x = A.P.x + A.P.face * 40 * A.k(); it.y = A.P.y; it.free = false; it.bx = null;
+  }
+  function updateItems(dt) {
+    const k = A.k();
+    for (const it of items) {
+      it.t += dt;
+      if (!it.falling || it.carried) continue;
+      const py = it.y; it.vy += 2300 * k * dt; it.x += (it.vx || 0) * dt; it.y += it.vy * dt; it.rotM = (it.rotM || 0) + (it.vx || 0) * dt * 0.02;
+      const pl = A.platBelow(it.x, py);
+      if (pl && it.y >= pl.y) { it.y = pl.y; if (it.vy > 520 * k) { it.vy *= -0.32; it.vx *= 0.6; } else { it.falling = false; it.vy = 0; it.vx = 0; it.rotM = 0; } }
+      else if (it.y > A.H() + 80) { it.falling = false; it.y = A.groundY(); }
+    }
+  }
 
   /** 画世界里的东西:平台、道具。layer: 'back'(在小人身后)/'front'(在小人前面) */
   D.draw = (ctx, u, dpr, touch, layer) => {
-    if (!active && !items.length && !Object.keys(platforms).length) return;
+    if (!active && !items.length && !Object.keys(platforms).length && !Object.keys(shapes).length) return;
     const S = A.S(), P = A.P, now = A.now();
     if (layer === 'back') {
       for (const k in platforms) drawPlatform(ctx, u, dpr, touch, platforms[k], now);
     }
+    for (const k in shapes) if ((shapes[k].layer === 'front') === (layer === 'front')) drawShape(ctx, dpr, touch, shapes[k], now);
     for (const it of items) {
-      const isBack = it.carried ? it.how === 'back' : it.layer === 'back';
+      const isBack = it.carried ? (it.clayer ? it.clayer === 'back' : it.at === 'back') : it.layer === 'back';
       if ((layer === 'back') !== isBack) continue;
       drawItem(ctx, u, dpr, touch, it, now, S, P);
     }
@@ -544,24 +836,42 @@
     let x = it.x + a.dx, y = it.y + a.dy, o = Object.assign({ flip: it.flip }, a.o), strings = false;
     const szD = spr ? Pr.size(spr, Math.max(1, Math.round(px))) : { w: 0, h: 0 }, szc = { w: szD.w / dpr, h: szD.h / dpr };   // 屏幕上的 CSS 像素尺寸
     if (it.carried) {
-      const fl = P.fly, sway = Math.sin(it.t * 2 + 1) * 3 * S;
-      if (it.how === 'balloon') { x = P.x + sway + (fl ? -P.face * 3 * S : 0); y = P.y - 21 * S - (fl ? Math.sin(it.t * 3) * 1.5 * S : 0); o.anchor = 'b'; o.rot = (fl && flyS ? -clamp((flyS.vx || 0) / 400, -1, 1) * 0.05 : 0) + Math.sin(it.t * 1.7) * 0.03; strings = true; }
-      else if (it.how === 'hold') { x = P.x + P.face * 8 * S; y = P.y - 6 * S; o.anchor = 'b'; o.flip = false; }
-      else if (it.how === 'back') { x = P.x - P.face * 7 * S; y = P.y - 2 * S; o.anchor = 'b'; }
-      else { x = P.x + P.face * 1.5 * S; y = P.y - 15.5 * S - (P.hat ? 4.5 * S : 0) + a.dy; o.anchor = 'b'; }
-    } else if (spr && !it.free && (spr.anchor || 'b') === 'c') { y = it.y - szc.h / 2 + a.dy; }   // 站在地上的"中心锚点"图:把底边放到地面
-    if (!spr) {                                           // emoji 道具(旧写法)
-      const qy = it.carried ? y - 3 * S : it.y - 5.5 * S + a.dy;
-      Rig.drawParticle(ctx, u, dpr, { k: 'text', text: it.emoji, x, y: qy, life: 1, max: 1, size: 2.3 * it.scale });
-      touch(x - 40, qy - 40, x + 40, qy + 40); return;
+      const fl = P.fly, f = P.face, lp = lastPose || DEFP, prot = (lp.rot || 0) * f, sway = Math.sin(it.t * 2 + 1) * 3 * S, dir = it.flip ? f > 0 : f < 0;
+      o.anchor = 'b';
+      switch (it.at) {
+        case 'hands': {                                      // 双手举过头顶(气球 / 伞 / 降落伞 / 风筝…)
+          const h = anchor('hands'), vx = (fl && flyS ? flyS.vx : 0) || ((petMover() || {}).vx || 0);
+          x = h[0] + (it.line ? sway - (fl ? f * 3 * S : 0) : 0); y = h[1] - (it.line ? 8 * S + (fl ? Math.sin(it.t * 3) * 1.5 * S : 0) : -2 * S);
+          o.rot = (it.line ? -clamp(vx / 400, -1, 1) * 0.06 + Math.sin(it.t * 1.7) * 0.03 : prot * 0.3); strings = it.line; break;
+        }
+        case 'hand': { const h = anchor('hand'); x = h[0]; y = h[1] + szc.h * 0.35; o.rot = prot; o.flip = dir; break; }
+        case 'front': { const b = anchor('pet'); x = b[0] + f * 3 * S; y = b[1] + szc.h / 2; o.rot = prot; o.flip = dir; break; }
+        case 'back': { const b = anchor('back'); x = b[0]; y = b[1] + szc.h * 0.5; o.rot = prot; o.flip = dir; break; }
+        case 'under': { x = P.x; y = P.y; o.rot = prot; o.flip = dir; break; }   // 骑着:道具在脚下,小人被抬高
+        default: { const h = anchor('head'); x = h[0]; y = h[1] - (P.hat ? 4.5 * S : 0) + a.dy; o.rot = prot; }
+      }
+      x += (it.cdx || 0) * S * f; y += (it.cdy || 0) * S;
+      if (it.crot) o.rot = (o.rot || 0) + it.crot * f;
+      if (it.line && it.at !== 'hands') strings = true;
+    } else {
+      if (spr && !it.free && (spr.anchor || 'b') === 'c') y = it.y - szc.h / 2 + a.dy;   // 站在地上的"中心锚点"图:把底边放到地面
+      if (it.rotM) o.rot = (o.rot || 0) + it.rotM;
     }
-    if (strings) {                                        // 气球的绳子:从手到气球底部(大的热气球用两根)
-      const hx = P.x, hy = P.y - 8 * S;
+    if (!spr) {                                           // emoji 道具(旧写法)
+      const qy = it.carried ? y - 3 * S : (it.free ? y : it.y - 5.5 * S + a.dy), r = 1.3 * S * it.scale * 2.3;
+      Rig.drawParticle(ctx, u, dpr, { k: 'text', text: it.emoji, x, y: qy, life: 1, max: 1, size: 2.3 * it.scale, rot: o.rot });
+      it.bx = [x - r, qy - r, x + r, qy + r]; it.flipD = false;
+      touch(x - 40 - r, qy - 40 - r, x + 40 + r, qy + 40 + r); return;
+    }
+    const anc = o.anchor || spr.anchor || 'b';
+    it.bx = [x - szc.w / 2, anc === 'c' ? y - szc.h / 2 : y - szc.h, x + szc.w / 2, anc === 'c' ? y + szc.h / 2 : y]; it.flipD = !!o.flip;
+    if (strings) {                                        // 牵绳:从手到道具底部(很宽的热气球用两根,从两只手各牵一根)
+      const hR = anchor('hand'), hL = anchor('handL');
       ctx.save(); ctx.strokeStyle = 'rgba(70,60,55,.85)'; ctx.lineWidth = Math.max(1, Math.round(dpr * 1.2)); ctx.beginPath();
-      if (szc.w > 12 * S) { ctx.moveTo((hx - 5 * S) * dpr, hy * dpr); ctx.lineTo((x - szc.w * 0.16) * dpr, y * dpr); ctx.moveTo((hx + 5 * S) * dpr, hy * dpr); ctx.lineTo((x + szc.w * 0.16) * dpr, y * dpr); }
-      else { ctx.moveTo((hx + P.face * 6 * S) * dpr, hy * dpr); ctx.lineTo(x * dpr, y * dpr); }
+      if (szc.w > 12 * S && it.at === 'hands' && !it.cdx) { ctx.moveTo(hL[0] * dpr, hL[1] * dpr); ctx.lineTo((x - szc.w * 0.16 * P.face) * dpr, y * dpr); ctx.moveTo(hR[0] * dpr, hR[1] * dpr); ctx.lineTo((x + szc.w * 0.16 * P.face) * dpr, y * dpr); }
+      else { const by = anc === 'c' ? y + szc.h / 2 : y; ctx.moveTo(hR[0] * dpr, hR[1] * dpr); ctx.quadraticCurveTo(((hR[0] + x) / 2) * dpr, (Math.max(hR[1], by) + 6 * S) * dpr, x * dpr, by * dpr); }
       ctx.stroke(); ctx.restore();
-      touch(Math.min(hx, x) - 60, y - szc.h - 10, Math.max(hx, x) + 60, hy + 10);
+      touch(Math.min(hR[0], hL[0], x) - 60, Math.min(y - szc.h, hR[1]) - 10, Math.max(hR[0], hL[0], x) + 60, Math.max(hR[1], y) + 20);
     }
     const box = Pr.draw(ctx, spr, x * dpr, y * dpr, px, o);
     if (box) touch(box.x1 / dpr - 6, box.y1 / dpr - 6, box.x2 / dpr + 6, box.y2 / dpr + 6);
@@ -656,12 +966,31 @@
     if (pl && pl.style === 'rope' && P.mode === 'story' && !animState) {
       const m = st.moving ? 1 : 0.5; p.armL = [3, -2.5, 3]; p.armR = [3, -2.5, 3]; p.rot = (p.rot || 0) + Math.sin(A.now() * 3.4) * 0.11 * m; p.eye = p.eye === 'open' || !p.eye ? 'wide' : p.eye; p.mouth = st.moving ? 'o' : p.mouth;
     }
-    // 飞行:腿悬空,手抓着气球绳(没气球就张开手臂)
-    if (P.fly) {
+    const pm = petMover(), hp = holdPose || {};
+    if (pm) {                                               // 万能运动中:按是否踩着东西决定走路 / 悬空,再叠加关键帧、旋转、倾斜
+      const pl = A.platBelow(P.x, P.y - 2), onSurf = pl && pl.y - P.y < 6 && pm.phase === 1;
+      if (onSurf && Math.abs(pm.vx) > 30) { p.legs = Math.abs(pm.vx) > 260 * A.k() ? 'run' : 'walk'; p.legT = P.legT; p.dy = -Math.abs(Math.sin(P.legT)) * 0.7; }
+      else if (!onSurf) { p.legs = 'dangle'; p.legT = P.legT; p.shadow = 0.25; p.dy = 0; if (!hp.armL && !(carry && (carry.at === 'hands' || carry.at === 'hand'))) { p.armL = [2, -3, 3]; p.armR = [2, -3, 3]; } }
+      if (pm.n.keys) Object.assign(p, sample(pm.n.keys, pm.u));
+      p.rot = (p.rot || 0) + pm.spinR + pm.tilt;
+    } else if (P.fly) {                                     // 悬空(飞行 / 停在半空):腿悬空
       p.legs = 'dangle'; p.legT = P.legT; p.shadow = 0; p.dy = 0;
-      if (carry && carry.how === 'balloon') { p.armL = [1, -6, 3]; p.armR = [1, -6, 3]; } else { p.armL = [3, -3, 3]; p.armR = [3, -3, 3]; }
-      if (!animState) { p.eye = 'happy'; p.mouth = 'big'; p.blush = 0.5; p.rot = (p.rot || 0) + clamp(((flyS && flyS.vx) || 0) / 2200, -0.14, 0.14) + Math.sin(A.now() * 1.8) * 0.03; }
+      if (!hp.armL) { p.armL = [3, -3, 3]; p.armR = [3, -3, 3]; }
+      if (!animState && !(hov && hov.still)) { if (!hp.eye) p.eye = 'happy'; if (!hp.mouth) p.mouth = 'big'; p.blush = Math.max(p.blush || 0, 0.5); p.rot = (p.rot || 0) + clamp(((flyS && flyS.vx) || 0) / 2200, -0.14, 0.14) + Math.sin(A.now() * 1.8) * 0.03; }
     }
+    // 道具挂在身上时的手臂 / 坐姿(关键帧里写了手臂就以关键帧为准)
+    const kArms = (animState && animState.keys.some(q => q.armL || q.armR)) || (pm && pm.n.keys && pm.n.keys.some(q => q.armL || q.armR)) || hp.armL || hp.armR;
+    if (carry && !kArms) {
+      if (carry.at === 'hands') { p.armL = [1, -6, 3]; p.armR = [1, -6, 3]; }
+      else if (carry.at === 'hand') p.armR = [1, -3, 3];
+      else if (carry.at === 'front') { p.armL = [-1, -2, 3]; p.armR = [-1, -2, 3]; }
+    }
+    if (carry && carry.at === 'under') {                    // 骑着 / 站在道具上:被抬高,陷进去 sink 那么深
+      p.lift = (p.lift || 0) + Math.max(0, sprH(carry) - carry.sink * 9); p.shadow = 0;   // sink 按宠物身体算:0=站在上面,0.5≈陷到腰,1≈只露出脑袋
+      if (carry.sink >= 0.3 && !(pm && pm.n.keys && pm.n.keys.some(q => q.legs))) p.legs = 'tuck';
+    }
+    const sz = (p.size || 1) * curSize(); delete p.size;
+    if (sz !== 1) { p.sx = (p.sx || 1) * sz; p.sy = (p.sy || 1) * sz; }
   };
 
   D.thinking = on => {

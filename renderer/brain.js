@@ -205,7 +205,8 @@
     bubT -= dt;
     if (bubT <= 0) { bub.className = ''; return; }
     const w = bub.offsetWidth, h = bub.offsetHeight;
-    const headY = P.y - (P.mode === 'sleep' || P.mode === 'sit' ? 14 : 15.5) * S - (P.hat || P.mode === 'party' ? 4 * S : 0);
+    let headY = P.y - (P.mode === 'sleep' || P.mode === 'sit' ? 14 : 15.5) * S - (P.hat || P.mode === 'party' ? 4 * S : 0);
+    const dTop = Director.topY ? Director.topY() : null; if (dTop != null && P.mode === 'story') headY = Math.min(headY, dTop - 1.5 * S);
     let bx = clamp(P.x - w / 2, 6, W - w - 6), by = headY - h - 12;
     let below = false;
     if (by < 4) { by = P.y + 6 * S; below = true; }
@@ -242,8 +243,8 @@
     P.vx = vx || 0; P.vy = vy || 0;
   }
   function startJump(vx, vy, tag) {
-    P.plat = null; P.platKey = null; P.thrown = false; P.bounces = 0;
-    setMode('air', { tag, vx, vy });
+    P.plat = null; P.platKey = null; P.thrown = tag === 'spin'; P.bounces = 0; if (P.thrown) P.rot = 0;
+    setMode('air', { tag, vx, vy, vr: tag === 'spin' ? (sign(vx || P.face) * 9) : 0 });
     P.vx = vx; P.vy = vy;
   }
   function attach(pl) {
@@ -999,7 +1000,7 @@
     if (sp.to === 'cursor') vx = clamp((cur.x - P.x) / T, -maxVx, maxVx);
     else if (sp.to === 'left') vx = -260 * k; else if (sp.to === 'right') vx = 260 * k; else vx = (sp.dx || 0) * 320 * k;
     if (vx) P.face = sign(vx);
-    setMode('crouch', { vx, vy: vy0, tag: 'hop' }); return true;
+    setMode('crouch', { vx, vy: vy0, tag: sp.spin ? 'spin' : 'hop' }); return true;
   }
 
   // ---------------------------------------------------------------- 二维导航(躲猫猫 / 追鼠标 / 跳到别的窗口)
@@ -1380,9 +1381,11 @@
       pose.armL = [1, -6 + (f > 0 ? 1 : 0), 3]; pose.armR = [1, -6 + (f > 0 ? 0 : 1), 3];
     }
     if (P.shiny && !pose.hat) pose.hat = 'crown';
+    if (Director.notePose) Director.notePose(pose);
     Director.draw(ctx, u, dpr, touch, 'back');
     Rig.drawPet(ctx, u, P.x * dpr, P.y * dpr, pose, P.face);
-    touch(P.x - 26 * S, P.y - 44 * S, P.x + 26 * S, P.y + 8 * S);
+    const zs = Math.max(1, Math.abs(pose.sx || 1), Math.abs(pose.sy || 1)), lf = Math.max(0, pose.lift || 0) * S;
+    touch(P.x - 26 * S * zs, P.y - 44 * S * zs - lf, P.x + 26 * S * zs, P.y + 8 * S * zs);
     if (crit.on) { Rig.drawCritter(ctx, u, dpr, crit, now); touch(crit.x - 24, crit.y - 34, crit.x + 24, crit.y + 12); }
     if (ball.on) { Rig.drawBall(ctx, u, dpr, ball); touch(ball.x - 20, ball.y - 30, ball.x + 20, ball.y + 10); }
     Director.draw(ctx, u, dpr, touch, 'front');
