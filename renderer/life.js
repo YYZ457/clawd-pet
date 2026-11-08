@@ -132,7 +132,7 @@ const Life = (() => {
   }
 
   // ------------------------------------------------------------ 事件 -> 记忆 / 情绪
-  function bump(ev) {
+  function bump(ev, arg) {
     if (!mem) return;
     const m = mood;
     switch (ev) {
@@ -145,6 +145,7 @@ const Life = (() => {
       case 'cookie': mem.cookies++; m.joy = clamp(m.joy + 0.1, 0, 1); break;
       case 'nap': mem.naps++; break;
       case 'play': m.boredom = clamp(m.boredom - 0.35, 0, 1); m.joy = clamp(m.joy + 0.05, 0, 1); break;
+      case 'story': mem.stories = (mem.stories || 0) + 1; mem.lastStory = String(arg || '').slice(0, 16); m.boredom = clamp(m.boredom - 0.4, 0, 1); m.joy = clamp(m.joy + 0.08, 0, 1); break;
       case 'return': m.lonely = 0; m.joy = clamp(m.joy + 0.1, 0, 1); break;
     }
   }
@@ -250,8 +251,16 @@ const Life = (() => {
     return null;
   }
 
+  function summary() {
+    if (!mem) return '';
+    const h = new Date().getHours(), tod = h < 5 ? '深夜' : h < 11 ? '早上' : h < 14 ? '中午' : h < 18 ? '下午' : h < 23 ? '晚上' : '深夜', m = mood;
+    const feel = m.joy > 0.75 ? '很开心' : m.joy < 0.4 ? '有点低落' : '平静';
+    const body = m.energy < 0.3 ? '很困' : m.boredom > 0.6 ? '有点无聊' : m.lonely > 0.6 ? '有点想你' : '精神不错';
+    return `性格:${traits.map(t => TRAIT_ZH[t]).join('+')}|认识第${visit.n}天,被摸${mem.pets}次|心情${feel},${body}|现在${tod}${h}点` + (mem.lastStory ? `|上次演过《${mem.lastStory}》` : '');
+  }
+
   return {
-    init, save, bump, tick, line, greeting, today, cosmetics, weights, followChance, appReact, stage, visit,
+    init, save, bump, summary, tick, line, greeting, today, cosmetics, weights, followChance, appReact, stage, visit,
     mood, get mem() { return mem; }, get traits() { return traits; }, TRAIT_ZH
   };
 })();

@@ -22,13 +22,25 @@
   #bubble.term { background: #1e1b1a; color: #f0e6df; border-color: #D97757; font-family: Consolas,"Cascadia Mono",monospace; font-weight: 500; }
   #bubble.term::after { border-top-color: #D97757; }
   #bubble.term .o { color: #D97757; }
+  #choices { position: fixed; left: 0; top: 0; display: none; gap: 7px; flex-wrap: wrap; justify-content: center; max-width: 330px; will-change: transform; }
+  #choices.show { display: flex; }
+  #choices button {
+    font: 700 13px/1.2 "Microsoft YaHei UI","PingFang SC","Segoe UI","Noto Sans CJK SC",sans-serif; cursor: pointer; color: #fff; background: #D97757;
+    border: 2px solid #3a2a22; border-radius: 999px; padding: 6px 13px; box-shadow: 0 2px 0 rgba(58,42,34,.35); pointer-events: auto;
+  }
+  #choices button:hover { background: #e88a69; transform: translateY(-1px); }
+  #choices button:active { transform: translateY(1px); box-shadow: none; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="bubble"></div>
+<div id="choices"></div>
 <script src="rig.js"></script>
 <script src="life.js"></script>
+<script src="script.js"></script>
+<script src="stories.js"></script>
+<script src="director.js"></script>
 <script src="brain.js"></script>
 </body>
 </html>

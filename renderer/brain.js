@@ -130,7 +130,8 @@
   function overPet(x, y) {
     return x >= P.x - 10 * S && x <= P.x + 10 * S && y >= P.y - 12.5 * S && y <= P.y + (P.mode === 'edge' ? 3.5 : 1) * S;
   }
-  function hoverCheck() { setInteractive(!!down || P.mode === 'grab' || overPet(cur.x, cur.y)); }
+  function overChips(x, y) { const r = window.Director && Director.chipsRect(); return !!r && x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6; }
+  function hoverCheck() { setInteractive(!!down || P.mode === 'grab' || overPet(cur.x, cur.y) || overChips(cur.x, cur.y)); }
 
   // ---------------------------------------------------------------- particles / bubble
   const fx = [];
@@ -150,14 +151,28 @@
     }
   }
 
-  let bubT = 0, bubDur = 0;
+  let bubT = 0, bubDur = 0, storySay = false, bubPos = { x: 0, y: 0, w: 0, h: 0, below: false };
   function say(text, ms = 2400, cls = '', html = false) {
+    if (!storySay && window.Director && Director.active()) return;      // 演剧情时,其它气泡先闭嘴
     if (quiet && !cls.includes('force')) return;
     if (html) bub.innerHTML = text; else bub.textContent = text;
     bub.className = 'show ' + cls.replace('force', '');
     bubT = ms / 1000; bubDur = bubT;
   }
+  function sayStory(text, ms, cls, html) { storySay = true; try { say(text, ms, (cls || '') + ' force', html); } finally { storySay = false; } }
+  function hideBubble() { bubT = 0; bub.className = ''; }
+  function updateChips() {
+    if (!window.Director || !Director.chipsVisible()) return;
+    const el = document.getElementById('choices'), w = el.offsetWidth, h = el.offsetHeight;
+    const headY = P.y - 15.5 * S - (P.hat ? 3 * S : 0);
+    let y;
+    if (bubT > 0) y = bubPos.below ? bubPos.y + bubPos.h + 8 : bubPos.y - h - 8;
+    else y = headY - h - 10;
+    if (y < 4) y = bubT > 0 ? bubPos.y + bubPos.h + 8 : P.y + 6 * S;
+    el.style.transform = `translate(${Math.round(clamp(P.x - w / 2, 6, W - w - 6))}px,${Math.round(y)}px)`;
+  }
   function updateBubble(dt) {
+    updateChips();
     if (bubT <= 0) return;
     bubT -= dt;
     if (bubT <= 0) { bub.className = ''; return; }
@@ -166,7 +181,7 @@
     let bx = clamp(P.x - w / 2, 6, W - w - 6), by = headY - h - 12;
     let below = false;
     if (by < 4) { by = P.y + 6 * S; below = true; }
-    bub.classList.toggle('below', below);
+    bub.classList.toggle('below', below); bubPos = { x: bx, y: by, w, h, below };
     bub.style.setProperty('--tx', clamp(P.x - bx, 14, w - 14) + 'px');
     bub.style.transform = `translate(${Math.round(bx)}px,${Math.round(by)}px)`;
   }
@@ -595,7 +610,7 @@
   };
 
   B.petted = {
-    enter(d) { d.idle = 0; d.h = 0; P.love++; Life.bump('pet'); if (chance(0.5)) say(Life.line('pet_' + Life.stage()), 1600); },
+    enter(d) { d.idle = 0; d.h = 0; P.love++; Life.bump('pet'); Director.event('pet'); if (chance(0.5)) say(Life.line('pet_' + Life.stage()), 1600); },
     update(dt) {
       const d = P.d; d.h -= dt;
       if (petting) d.idle = 0; else d.idle += dt;
@@ -903,6 +918,12 @@
   };
   function faceTo(x) { if (Math.abs(x - P.x) > 12) P.face = sign(x - P.x); }
 
+  B.story = {
+    enter() {},
+    update() {},
+    pose(p) { base(p); Director.applyPose(p); }
+  };
+
   B.wiggle = { // 兼容占位
     enter() { setMode('idle'); }
   };
@@ -933,6 +954,7 @@
 
   // ---------------------------------------------------------------- decisions
   function decide() {
+    if (Director.onFree()) return;
     if (!P.plat) { startFall(0, 0); return; }
     const pl = P.plat, width = pl.x2 - pl.x1, onWin = P.platKey !== 'g';
     const roomy = width > petW * 3, calmCur = cur.known;
@@ -955,6 +977,8 @@
     if (roomy) { add('carry', 2.5); if (width > petW * 7) add('ball', 3); }
     if (onWin) add('edge', 8);
     add('sleep', sleepy ? 9 : 1);
+    const sk = (Life.mem && Life.mem.skills) || {};
+    for (const nm in sk) add('skill:' + nm, 1.3);
     const ws = Life.weights(w, { typing: isTyping() }).filter(([n]) => n !== P.lastAct);
     pickAct(wpick(ws));
   }
@@ -965,6 +989,7 @@
   }
   function pickAct(n) {
     P.lastAct = n;
+    if (n.startsWith('skill:')) { if (!Director.playSkill(n.slice(6))) setMode('idle'); return; }
     const pl = P.plat;
     switch (n) {
       case 'run': return setMode('walk', { sp: 190 * k * rnd(0.9, 1.15) });
@@ -1006,7 +1031,10 @@
     else if (P.mode === 'hold') decide();
     hoverCheck();
   });
-  window.addEventListener('contextmenu', e => e.preventDefault());
+  window.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if (api && api.openChat && overPet(e.clientX, e.clientY)) api.openChat({ x: P.x, y: P.y, ctx: Life.summary() });
+  });
 
   function startGrab(x, y) {
     const lx = (x - P.x) / S * P.face, ly = (y - P.y) / S;
@@ -1019,7 +1047,7 @@
     let vx = clamp(cur.vx, -2800, 2800), vy = clamp(cur.vy, -2800, 2800);
     if (Math.hypot(vx, vy) < 120) { vx = 0; vy = 0; }
     startFall(vx, vy, true);
-    Life.bump('throw');
+    Life.bump('throw'); Director.event('throw');
     if (Math.hypot(vx, vy) > 700) say(Life.line(Life.mem && Life.mem.throws > 8 ? 'throw_many' : 'throw'), 1700);
     P.d.vr = clamp(vx * 0.004, -9, 9) + (wob ? 6 : 0);
     if (wob) P.afterLand = 'dizzy';
@@ -1028,6 +1056,7 @@
 
   function onClick(x, y) {
     if (AIR.has(P.mode) || P.mode === 'air' || P.mode === 'dizzy' || P.mode === 'party' || P.mode === 'love') return;
+    Director.event('click');
     const t = performance.now(); clicks = clicks.filter(c => t - c < 2200); clicks.push(t);
     const n = clicks.length;
     const lx = (x - P.x) / S * P.face, ly = (y - P.y) / S;
@@ -1036,7 +1065,7 @@
     if (n >= 5) { clicks = []; setMode('dizzy', { dur: 3 }); return; }
     if (n === 2 && t - (clicks[0] || 0) < 380) { setMode('flip'); return; }
     if (n === 3) { say(pick(['痛痛痛!', '再戳要晕啦~', '你好烦哦~']), 1400); setMode('poke'); return; }
-    if (ly > -3.8 && ly < 1) { Life.bump('tickle'); setMode('tickle'); return; }               // 戳小短腿
+    if (ly > -3.8 && ly < 1) { Life.bump('tickle'); Director.event('tickle'); setMode('tickle'); return; }               // 戳小短腿
     if (ly > -9.8 && ly < -5.2 && Math.abs(lx) > 1.4 && Math.abs(lx) < 5.2) { Life.bump('ouch'); setMode('ouch'); return; }  // 戳眼睛
     if (chance(0.25)) { hearts(3); }
     Life.bump('poke');
@@ -1067,10 +1096,11 @@
     else if (idleLong && ui0 < 2.5) {
       const long = idleLong > 1800; idleLong = 0; Life.bump('return');
       if (P.mode === 'sleep') wake(true);
-      else if (calm0) { say(Life.line(long ? 'back_long' : 'back'), 2800); setMode('wave', { dur: 2.2 }); return; }
+      else if (calm0 && !Director.busy()) { say(Life.line(long ? 'back_long' : 'back'), 2800); setMode('wave', { dur: 2.2 }); return; }
     }
     const lo = Life.tick(dt, { calm: calm0, typing: isTyping(), userIdle: ui0, mode: P.mode });
-    if (lo) {
+    Director.update(dt);
+    if (lo && !Director.busy()) {
       if (lo.kind === 'milestone') { say(lo.text, 4800); applyCosmetics(); if (lo.mode) { setMode(lo.mode, { quiet: true }); return; } }
       else say(lo.text, 3400);
     }
@@ -1106,7 +1136,7 @@
     clockT -= dt;
     if (clockT <= 0) {
       clockT = 1; const dtn = new Date(), h = dtn.getHours(), m = dtn.getMinutes();
-      if (m === 0 && lastChime !== h && calm) {
+      if (m === 0 && lastChime !== h && calm && !Director.busy()) {
         lastChime = h;
         if (h === 12 || h === 18) setMode('cookie', { meal: true });
         else if (h === 23 || h === 0) { say('夜深了…早点休息吧~', 3000); setMode('wave', { dur: 2 }); }
@@ -1115,7 +1145,7 @@
     }
     if (P.shiny && chance(dt * 3)) spawn('spark', P.x + rnd(-8, 8) * S, P.y - rnd(0, 12) * S, { vy: -14, life: 0.6, size: 1 });
   }
-  const CALM = new Set(['idle', 'walk', 'sit', 'wave', 'stretch', 'dance', 'read', 'coffee', 'cookie', 'edge', 'follow', 'hiccup', 'moonwalk', 'spin', 'bow', 'laptop', 'ball', 'doze']);
+  const CALM = new Set(['idle', 'walk', 'sit', 'wave', 'stretch', 'dance', 'read', 'coffee', 'cookie', 'edge', 'follow', 'hiccup', 'moonwalk', 'spin', 'bow', 'laptop', 'ball', 'doze', 'story']);
 
   // ---------------------------------------------------------------- frame loop
   let last = performance.now(), fullClear = true, prevBox = null, box = null;
@@ -1164,6 +1194,7 @@
     touch(P.x - 26 * S, P.y - 44 * S, P.x + 26 * S, P.y + 8 * S);
     if (crit.on) { Rig.drawCritter(ctx, u, dpr, crit, now); touch(crit.x - 24, crit.y - 34, crit.x + 24, crit.y + 12); }
     if (ball.on) { Rig.drawBall(ctx, u, dpr, ball); touch(ball.x - 20, ball.y - 30, ball.x + 20, ball.y + 10); }
+    for (const q of Director.itemParticles()) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
     for (const q of fx) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
     prevBox = box;
   }
@@ -1210,7 +1241,7 @@
     api.onWindows(list => {
       list = list || [];
       const ids = new Set(list.map(w => w.id));
-      if (seenIds && seenIds.size > 0 && CALM.has(P.mode) && now - lastWinReact > 25 && chance(0.5)) {
+      if (seenIds && seenIds.size > 0 && CALM.has(P.mode) && !Director.busy() && now - lastWinReact > 25 && chance(0.5)) {
         const nw = list.find(w => !seenIds.has(w.id));
         if (nw) { lastWinReact = now; setMode('notice', { tx: (nw.l + nw.r) / 2 }); }
       }
@@ -1219,11 +1250,16 @@
     if (api.onApp) api.onApp(name => {
       if (!sense || !Life.mem) return;
       const r = Life.appReact(name); if (!r) return;
-      if (CALM.has(P.mode)) { say(r.text, 2800); if (r.mode === 'sit') setMode('sit', { dur: 8 }); else setMode(r.mode, r.mode === 'cheer' ? { quiet: true } : {}); }
+      if (CALM.has(P.mode) && !Director.busy()) { say(r.text, 2800); if (r.mode === 'sit') setMode('sit', { dur: 8 }); else setMode(r.mode, r.mode === 'cheer' ? { quiet: true } : {}); }
     });
     api.onDom(list => { domList = list || []; domStamp = performance.now(); rebuild(); });
+    if (api.onStory) api.onStory(m => { if (m && m.payload) Director.play(m.payload, { premise: m.premise }); });
+    if (api.onThinking) api.onThinking(on => Director.thinking(on));
+    if (api.onSay) api.onSay(t => say(String(t).slice(0, 80), 4200, 'force'));
     api.onCommand(c => {
-      if (c === 'summon') summon();
+      if (c !== 'stopStory' && Director.active()) Director.stop(true);
+      if (c === 'stopStory') { if (Director.active()) Director.stop(false); }
+      else if (c === 'summon') summon();
       else if (c === 'sleep') setMode('sit', { dur: 0.8 }), setTimeout(() => setMode('sleep', {}), 850);
       else if (c === 'wake') wake();
       else if (c === 'dance') setMode('dance');
@@ -1247,15 +1283,30 @@
     start();
   }
 
+  Director.init({
+    P, cur, ball, S: () => S, k: () => k, petW: () => petW, W: () => W, now: () => now,
+    setMode, say, sayStory, hideBubble, spawn, hearts, stars, confetti, dust, note, ztext, decide,
+    askText: api && api.askText ? q => api.askText(q) : null,
+    llmContinue: api && api.llmContinue ? st => api.llmContinue(st) : null,
+    skills: () => (Life.mem && Life.mem.skills) || {},
+    saveSkill: (name, nd) => {
+      const m = Life.mem; if (!m) return; m.skills = m.skills || {};
+      const keys = Object.keys(m.skills); if (!(name in m.skills) && keys.length >= 12) delete m.skills[keys[0]];
+      m.skills[name] = nd; Life.save();
+    },
+    bump: (ev, arg) => Life.bump(ev, arg)
+  });
+
   function start() {
     applyCosmetics();
+    if (api && api.reportPet) setInterval(() => api.reportPet({ x: P.x, y: P.y, ctx: Life.summary() }), 1500);
     P.greetText = Life.greeting();
     summon();
     if (P.shiny) setTimeout(() => say('✨ 闪光 Clawd 出现了!', 3600, 'force'), 6500);
     requestAnimationFrame(t => { last = t; frame(t); });
   }
 
-  window.__clawd = { P, B, cur, fx, ball, crit, Life, setMode, say, decide, spawn, get plats() { return plats; }, hearts, stars, confetti, layout, startFall, setHat: h => { P.hat = P.baseHat = h; } };
+  window.__clawd = { P, B, cur, fx, ball, crit, Life, Director, setMode, say, decide, spawn, get plats() { return plats; }, hearts, stars, confetti, layout, startFall, setHat: h => { P.hat = P.baseHat = h; } };
   const force = qs.get('force');
   if (force) setTimeout(() => { P.greet = false; setMode(force, {}); }, 900);
 })();

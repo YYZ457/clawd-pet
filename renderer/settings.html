@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Clawd × 大模型设置</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+<style>
+  :root { --o: #D97757; --ink: #3a2a22; }
+  body { margin: 0; padding: 16px 18px; font: 13px/1.5 "Microsoft YaHei UI","PingFang SC","Segoe UI","Noto Sans CJK SC",sans-serif; color: var(--ink); background: #fffdf8; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 12px; opacity: .7; font-size: 12px; }
+  label { display: block; margin: 10px 0 3px; font-weight: 600; }
+  input[type=text], input[type=password], input[type=number] { width: 100%; box-sizing: border-box; font: inherit; padding: 7px 9px; border: 2px solid var(--ink); border-radius: 8px; background: #fff; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--o); }
+  .sw { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; font-weight: 700; }
+  .row { display: flex; gap: 10px; } .row > div { flex: 1; }
+  .btns { display: flex; gap: 8px; margin-top: 14px; }
+  button { font: inherit; cursor: pointer; border: 2px solid var(--ink); border-radius: 9px; padding: 7px 14px; background: #fff; color: var(--ink); font-weight: 600; }
+  button.pri { background: var(--o); color: #fff; }
+  .msg { min-height: 18px; margin-top: 8px; font-size: 12.5px; } .msg.err { color: #b3261e; } .msg.ok { color: #2e7d32; }
+  .note { margin-top: 12px; padding: 9px 11px; background: #fff3ea; border-radius: 9px; font-size: 12px; }
+  .note b { color: var(--o); }
+  small { opacity: .65; font-weight: 400; }
+</style>
+</head>
+<body>
+<h1>🔑 Clawd × 大模型(DeepSeek)</h1>
+<p class="sub">可选功能,默认关闭。不开也能玩全部离线内容和内置剧场。</p>
+<div class="sw"><input type="checkbox" id="enabled"><label for="enabled" style="margin:0">启用大模型(让 Clawd 即兴编剧 / 学新动作 / 聊天)</label></div>
+<label>API Key <small id="keyinfo"></small></label>
+<input type="password" id="key" placeholder="sk-…(留空 = 不修改)" autocomplete="off" spellcheck="false">
+<div class="row">
+  <div><label>接口地址</label><input type="text" id="base"></div>
+  <div><label>模型</label><input type="text" id="model"></div>
+</div>
+<div class="row">
+  <div><label>每日最多请求次数</label><input type="number" id="calls" min="1" max="500"></div>
+  <div><label>每日 token 上限</label><input type="number" id="tokens" min="1000" max="2000000" step="1000"></div>
+</div>
+<div class="btns"><button class="pri" id="save">保存</button><button id="test">测试连接</button><button id="clear">清除 Key</button></div>
+<div class="msg" id="msg"></div>
+<div class="note">
+  <b>会发送什么:</b>你输入的话 + Clawd 的性格/记忆摘要(认识天数、摸摸次数、心情这类数字和词)+ 当前时段。<br>
+  <b>不会发送:</b>窗口标题、文件、屏幕截图、你正在用的软件。<br>
+  <b>Key 存哪:</b>只存在本机,Windows 上用系统加密(DPAPI)保护;桌宠主画面读不到它,请求由后台进程发出。<br>
+  <b>省 token:</b>固定的短提示词(可命中缓存)+ 限制输出长度 + 每日额度,用完自动回到离线模式。
+</div>
+<script src="settings.js"></script>
+</body>
+</html>

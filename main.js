@@ -1,9 +1,12 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, shell, powerMonitor, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
+const llm = require('./llm');
+const Stories = require('./renderer/stories.js');
+const ScriptTools = require('./renderer/script.js');
 
 const isWin = process.platform === 'win32';
 const TEST = process.env.CLAWD_SHOT; // 自测:截图后退出
@@ -11,14 +14,16 @@ const TEST = process.env.CLAWD_SHOT; // 自测:截图后退出
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 
 let win = null, tray = null, ps = null, domServer = null;
-let settings = { scale: 4, quiet: false, autostart: false, sense: true };
+const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', keyEnc: '', keyPlain: '', dailyCalls: 40, dailyTokens: 80000 };
+let settings = { scale: 4, quiet: false, autostart: false, sense: true, llm: Object.assign({}, LLM_DEFAULT) };
+let chatWin = null, setWin = null, replyResolve = null, lastCtx = '', lastPet = { x: 400, y: 300 };
 let lastFg = '';
 let hiddenByUser = false, hiddenByFullscreen = false;
 let lastWinJson = '';
 
 // ------------------------------------------------------------ 设置
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-function loadSettings() { try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))); } catch (_) {} }
+function loadSettings() { try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))); } catch (_) {} settings.llm = Object.assign({}, LLM_DEFAULT, settings.llm || {}); }
 function saveSettings() { try { fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); fs.writeFileSync(settingsFile(), JSON.stringify(settings)); } catch (_) {} }
 
 // ------------------------------------------------------------ 记忆(只存在本机)
@@ -235,6 +240,164 @@ function handleDom(m) {
   win.webContents.send('dom', out);
 }
 
+// ------------------------------------------------------------ 大模型 / 聊天 / 剧情
+const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+function setKey(k) {
+  const c = settings.llm;
+  if (!k) { c.keyEnc = ''; c.keyPlain = ''; return; }
+  try {
+    if (safeStorage.isEncryptionAvailable()) { c.keyEnc = safeStorage.encryptString(k).toString('base64'); c.keyPlain = ''; return; }
+  } catch (_) {}
+  c.keyPlain = k; c.keyEnc = '';
+}
+function getKey() {
+  const c = settings.llm;
+  try { if (c.keyEnc) return safeStorage.decryptString(Buffer.from(c.keyEnc, 'base64')); } catch (_) {}
+  return c.keyPlain || '';
+}
+const usageFile = () => path.join(app.getPath('userData'), 'usage.json');
+const dayStr = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+function usage() {
+  let u = null; try { u = JSON.parse(fs.readFileSync(usageFile(), 'utf8')); } catch (_) {}
+  if (!u || u.day !== dayStr()) u = { day: dayStr(), calls: 0, tokens: 0 };
+  return u;
+}
+function addUsage(tokens) {
+  const u = usage(); u.calls++; u.tokens += tokens || 0;
+  try { fs.mkdirSync(path.dirname(usageFile()), { recursive: true }); fs.writeFileSync(usageFile(), JSON.stringify(u)); } catch (_) {}
+}
+async function runLLM(messages, opt = {}) {
+  const c = settings.llm, key = getKey();
+  if (!c.enabled) throw new llm.LLMError('还没开启大模型(托盘 → 大模型设置)', 'off');
+  if (!key) throw new llm.LLMError('还没填 API Key(点聊天框右上角 ⚙)', 'nokey');
+  const u = usage();
+  if (u.calls >= c.dailyCalls || u.tokens >= c.dailyTokens) throw new llm.LLMError('今天的额度用完啦(设置里可以调整)', 'budget');
+  const r = await llm.chat({ baseUrl: c.baseUrl, model: c.model, key }, messages, { maxTokens: opt.maxTokens || 900 });
+  addUsage(r.tokens);
+  return r;
+}
+const toOverlay = (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); };
+const setThinking = on => toOverlay('thinking', !!on);
+
+async function handleAsk(text) {
+  text = String(text || '').trim().slice(0, 200);
+  if (!text) return { ok: false, error: '说点什么吧~' };
+  let t = text;
+  if (/^\/演/.test(t)) t = '演一出互动小剧场:' + t.slice(2);
+  else if (/^\/学/.test(t)) t = '学一个新动作:' + t.slice(2);
+  else if (/^\/聊/.test(t)) t = '闲聊:' + t.slice(2);
+  setThinking(true);
+  try {
+    const r = await runLLM(llm.buildAsk(lastCtx, t));
+    const obj = llm.extractJSON(r.text);
+    const chk = ScriptTools.sanitize(obj);
+    if (!chk.ok) throw new llm.LLMError('它写的剧本我看不懂:' + chk.error, 'format');
+    toOverlay('story', { payload: obj, premise: text.slice(0, 80) });
+    return { ok: true, kind: chk.kind };
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    toOverlay('say', '😵 ' + msg);
+    return { ok: false, error: msg };
+  } finally { setThinking(false); }
+}
+
+async function handleContinue(st) {
+  st = st || {};
+  const clean = {
+    title: String(st.title || '').slice(0, 16), premise: String(st.premise || '').slice(0, 80), hint: String(st.hint || '').slice(0, 80),
+    seg: clampN(Number(st.seg) || 1, 1, 5), maxSeg: 4, log: Array.isArray(st.log) ? st.log.slice(-8).map(x => String(x).slice(0, 40)) : []
+  };
+  try {
+    const r = await runLLM(llm.buildContinue(lastCtx, clean));
+    const obj = llm.extractJSON(r.text);
+    const chk = ScriptTools.sanitize(obj);
+    if (!chk.ok) throw new llm.LLMError('续写的剧本不对:' + chk.error, 'format');
+    return { ok: true, payload: obj };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
+
+function openChat(opts = {}) {
+  if (chatWin && !chatWin.isDestroyed()) { const was = chatWin; chatWin = null; was.close(); if (!opts.force) return; }
+  const mode = opts.mode === 'reply' ? 'reply' : 'talk';
+  const w = 340, h = mode === 'reply' ? 150 : 262;
+  const d = display(), b = d.bounds, wa = d.workArea;
+  const px = b.x + (opts.x != null ? opts.x : lastPet.x), py = b.y + (opts.y != null ? opts.y : lastPet.y);
+  let x = Math.round(px + 48), y = Math.round(py - h - 24);
+  if (x + w > wa.x + wa.width - 8) x = Math.round(px - w - 48);
+  x = clampN(x, wa.x + 8, Math.max(wa.x + 8, wa.x + wa.width - w - 8)); y = clampN(y, wa.y + 8, Math.max(wa.y + 8, wa.y + wa.height - h - 8));
+  const cw = new BrowserWindow({
+    x, y, width: w, height: h, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false, fullscreenable: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+  });
+  chatWin = cw;
+  cw.setAlwaysOnTop(true, 'screen-saver');
+  cw.loadFile(path.join(__dirname, 'renderer', 'chat.html'), { query: { mode, q: opts.question || '' } });
+  cw.once('ready-to-show', () => { cw.show(); try { app.focus({ steal: true }); } catch (_) {} cw.focus(); });
+  cw.on('blur', () => setTimeout(() => { if (!cw.isDestroyed() && !cw.isFocused()) cw.close(); }, 300));
+  cw.on('closed', () => {
+    if (chatWin === cw) chatWin = null;
+    if (replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
+  });
+}
+function askText(q) {
+  return new Promise(res => {
+    if (replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
+    replyResolve = res; openChat({ mode: 'reply', question: String(q || '').slice(0, 40), force: true });
+  });
+}
+function openSettings() {
+  if (setWin && !setWin.isDestroyed()) { setWin.focus(); return; }
+  setWin = new BrowserWindow({
+    width: 440, height: 560, title: 'Clawd × 大模型设置', autoHideMenuBar: true, resizable: false, minimizable: false, maximizable: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+  });
+  setWin.setMenu(null);
+  setWin.loadFile(path.join(__dirname, 'renderer', 'settings.html'));
+  setWin.on('closed', () => { setWin = null; });
+}
+function llmPublic() {
+  const c = settings.llm;
+  return { enabled: c.enabled, baseUrl: c.baseUrl, model: c.model, dailyCalls: c.dailyCalls, dailyTokens: c.dailyTokens, hasKey: !!getKey(), used: usage(), encrypted: (() => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } })() };
+}
+
+ipcMain.handle('chat:status', () => Object.assign(llmPublic(), { builtin: Stories.list }));
+ipcMain.handle('chat:ask', (_e, text) => handleAsk(text));
+ipcMain.on('chat:builtin', (_e, id) => { const s = Stories.get(String(id)); if (s) toOverlay('story', { payload: s, premise: '内置:' + id }); if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
+ipcMain.on('chat:reply', (_e, text) => { if (replyResolve) { const r = replyResolve; replyResolve = null; r(String(text || '').slice(0, 40)); } if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
+ipcMain.on('chat:close', () => { if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
+ipcMain.on('chat:settings', () => { openSettings(); if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
+ipcMain.on('chat:open', (_e, o) => { if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); } openChat({ x: lastPet.x, y: lastPet.y }); });
+ipcMain.on('pet:report', (_e, o) => { if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); } });
+ipcMain.handle('ask-text', (_e, q) => askText(q));
+ipcMain.handle('story:continue', (_e, st) => handleContinue(st));
+ipcMain.handle('set:get', () => llmPublic());
+ipcMain.handle('set:save', (_e, o) => {
+  o = o || {}; const c = settings.llm;
+  if (typeof o.enabled === 'boolean') c.enabled = o.enabled;
+  if (typeof o.baseUrl === 'string') {
+    const u = o.baseUrl.trim();
+    if (!/^https:\/\//i.test(u) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(u)) return { ok: false, error: '地址必须以 https:// 开头(本机测试可用 http://127.0.0.1)' };
+    c.baseUrl = u.slice(0, 200);
+  }
+  if (typeof o.model === 'string' && o.model.trim()) c.model = o.model.trim().slice(0, 60);
+  if (o.dailyCalls != null) c.dailyCalls = clampN(Math.round(Number(o.dailyCalls)) || 40, 1, 500);
+  if (o.dailyTokens != null) c.dailyTokens = clampN(Math.round(Number(o.dailyTokens)) || 80000, 1000, 2000000);
+  if (o.clearKey) setKey('');
+  else if (typeof o.key === 'string' && o.key.trim()) setKey(o.key.trim());
+  saveSettings();
+  return { ok: true, state: llmPublic() };
+});
+ipcMain.handle('set:test', async () => {
+  const c = settings.llm, key = getKey();
+  if (!key) return { ok: false, error: '还没填 Key' };
+  const t0 = Date.now();
+  try {
+    const r = await llm.chat({ baseUrl: c.baseUrl, model: c.model, key }, [{ role: 'user', content: '只回复这个 JSON:{"kind":"chat","say":"ok"}' }], { maxTokens: 24, timeout: 20000 });
+    addUsage(r.tokens);
+    return { ok: true, ms: Date.now() - t0 };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
 // ------------------------------------------------------------ 托盘
 function trayIcon() {
   // 16x16 的像素 Clawd,直接用位图生成,不需要图片文件
@@ -282,6 +445,11 @@ function buildMenu() {
     { label: '☀️ 叫醒它', click: () => send('wake') },
     { label: '💃 跳个舞', click: () => send('dance') },
     { type: 'separator' },
+    { label: '💬 和 Clawd 说话…(也可右键点它)', click: () => openChat({}) },
+    { label: '🎭 内置剧场', submenu: Stories.list.map(s => ({ label: s.title + ' — ' + s.desc, click: () => { const sc = Stories.get(s.id); if (sc) toOverlay('story', { payload: sc, premise: '内置:' + s.id }); } })) },
+    { label: '⏹ 结束当前剧情', click: () => send('stopStory') },
+    { label: '🔑 大模型设置(DeepSeek)…', click: () => openSettings() },
+    { type: 'separator' },
     { label: '大小', submenu: sizes.map(([n, v]) => ({ label: n, type: 'radio', checked: settings.scale === v, click: () => { settings.scale = v; saveSettings(); if (win) win.webContents.send('info', info()); } })) },
     { label: '💬 显示气泡文字', type: 'checkbox', checked: !settings.quiet, click: m => { settings.quiet = !m.checked; saveSettings(); if (win) win.webContents.send('info', info()); } },
     { label: '👀 感知我在用什么软件(仅本机,不上传)', type: 'checkbox', checked: settings.sense, click: m => { settings.sense = m.checked; saveSettings(); if (win) win.webContents.send('info', info()); } },
@@ -317,8 +485,26 @@ app.whenReady().then(() => {
   startWindowWatcher();
   startDomServer();
   setInterval(pollCursor, 16);
+  if (process.env.CLAWD_SELFTEST) selfTest();
   const refresh = () => { if (!win) return; const b = display().bounds; win.setBounds({ x: b.x, y: b.y, width: b.width, height: b.height - 1 }); win.webContents.send('info', info()); };
   screen.on('display-metrics-changed', refresh);
   screen.on('display-added', refresh);
   screen.on('display-removed', refresh);
 });
+
+// ------------------------------------------------------------ 自测(只在 CLAWD_SELFTEST=1 时运行)
+function selfTest() {
+  const out = process.env.CLAWD_SELFTEST_OUT || path.join(app.getPath('userData'), 'selftest.json');
+  Object.assign(settings.llm, { enabled: true, baseUrl: process.env.CLAWD_LLM_URL, model: 'mock', dailyCalls: 50 });
+  setKey('sk-test');
+  win.webContents.on('did-finish-load', () => setTimeout(async () => {
+    const res = {};
+    res.ask = await handleAsk(process.env.CLAWD_SELFTEST_ASK || '演一出海盗寻宝');
+    await new Promise(r => setTimeout(r, 1500));
+    res.state = await win.webContents.executeJavaScript('JSON.stringify(window.__clawd.Director.state())').catch(e => String(e));
+    res.usage = usage();
+    res.status = llmPublic();
+    fs.writeFileSync(out, JSON.stringify(res, null, 1));
+    app.quit();
+  }, 3500));
+}
