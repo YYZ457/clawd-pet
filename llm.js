@@ -58,7 +58,7 @@ class LLMError extends Error { constructor(msg, code) { super(msg); this.code = 
 async function chat(cfg, messages, opt = {}) {
   const base = String(cfg.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
   const url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions';
-  const body = { model: cfg.model || 'deepseek-chat', messages, max_tokens: opt.maxTokens || 900, temperature: opt.temperature != null ? opt.temperature : 1.1, stream: false };
+  const body = { model: cfg.model || 'deepseek-flash', messages, max_tokens: opt.maxTokens || 900, temperature: opt.temperature != null ? opt.temperature : 1.1, stream: false };
   if (opt.json !== false) body.response_format = { type: 'json_object' };
   const post = async b => {
     const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), opt.timeout || 45000);
@@ -68,14 +68,19 @@ async function chat(cfg, messages, opt = {}) {
   };
   let res;
   try { res = await post(body); }
-  catch (e) { throw new LLMError(e && e.name === 'AbortError' ? '请求超时了' : '连不上服务器', 'net'); }
+  catch (e) { throw new LLMError(e && e.name === 'AbortError' ? '请求超时了' : ('网络连接失败: ' + (e && e.message || '连不上服务器')), 'net'); }
   if (res.status === 400 && body.response_format) {   // 个别兼容服务不支持 json_object
     delete body.response_format;
-    try { res = await post(body); } catch (e) { throw new LLMError('连不上服务器', 'net'); }
+    try { res = await post(body); } catch (e) { throw new LLMError('连不上服务器: ' + (e && e.message || ''), 'net'); }
   }
   if (!res.ok) {
-    const m = { 401: 'Key 无效或已失效', 402: '账户余额不足', 403: '没有权限', 404: '地址或模型名不对', 429: '请求太快了,稍后再试' }[res.status];
-    throw new LLMError(m || ('服务返回 ' + res.status), 'http' + res.status);
+    let detail = '';
+    try {
+      const errJson = await res.json();
+      detail = errJson && (errJson.error && errJson.error.message || errJson.message);
+    } catch (_) {}
+    const m = { 401: 'Key 无效或已失效', 402: '账户余额不足', 403: '没有权限', 404: '地址或模型名不对 (404)', 429: '请求太快了,稍后再试' }[res.status];
+    throw new LLMError(detail || m || ('服务返回 ' + res.status), 'http' + res.status);
   }
   const j = await res.json();
   const text = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;

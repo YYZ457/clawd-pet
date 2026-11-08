@@ -6,6 +6,7 @@
   const cv = document.getElementById('c');
   const ctx = cv.getContext('2d');
   const bub = document.getElementById('bubble');
+  const hitboxEl = document.getElementById('hitbox');
 
   // ---------------------------------------------------------------- utils
   const rnd = (a, b) => a + Math.random() * (b - a);
@@ -125,10 +126,22 @@
     if (v === interactive) return;
     interactive = v;
     if (api) api.setIgnore(!v);
-    document.body.style.cursor = v ? (P.mode === 'grab' ? 'grabbing' : 'grab') : 'default';
+    const curStyle = (P.mode === 'grab' || down) ? 'grabbing' : 'grab';
+    if (hitboxEl) hitboxEl.style.cursor = curStyle;
+    document.body.style.cursor = v ? curStyle : 'default';
+  }
+  function updateHitbox() {
+    if (!hitboxEl) return;
+    const hbW = Math.round(20 * S);
+    const hbH = Math.round(16 * S);
+    const hbX = Math.round(P.x - hbW / 2);
+    const hbY = Math.round(P.y - 13.5 * S);
+    hitboxEl.style.width = hbW + 'px';
+    hitboxEl.style.height = hbH + 'px';
+    hitboxEl.style.transform = `translate3d(${hbX}px, ${hbY}px, 0)`;
   }
   function overPet(x, y) {
-    return x >= P.x - 10 * S && x <= P.x + 10 * S && y >= P.y - 12.5 * S && y <= P.y + (P.mode === 'edge' ? 3.5 : 1) * S;
+    return x >= P.x - 10 * S && x <= P.x + 10 * S && y >= P.y - 13.5 * S && y <= P.y + (P.mode === 'edge' ? 3.5 : 2) * S;
   }
   function overChips(x, y) { const r = window.Director && Director.chipsRect(); return !!r && x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6; }
   function hoverCheck() { setInteractive(!!down || P.mode === 'grab' || overPet(cur.x, cur.y) || overChips(cur.x, cur.y)); }
@@ -1013,19 +1026,49 @@
   let down = null, clicks = [], petAcc = 0, lastOverMove = 0, petting = false;
   let circAng = null, circAcc = 0, circT = 0, lastStartle = 0;
 
+  function onMouseDownPet(e) {
+    if (e.button !== 0) return;
+    setCursor(e.clientX, e.clientY);
+    down = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+    if (hitboxEl) hitboxEl.style.cursor = 'grabbing';
+    document.body.style.cursor = 'grabbing';
+    setInteractive(true);
+  }
+
+  if (hitboxEl) {
+    hitboxEl.addEventListener('mouseenter', () => {
+      setInteractive(true);
+    });
+    hitboxEl.addEventListener('mouseleave', () => {
+      if (!down && P.mode !== 'grab') hoverCheck();
+    });
+    hitboxEl.addEventListener('mousedown', onMouseDownPet);
+    hitboxEl.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      if (api && api.openChat) api.openChat({ x: P.x, y: P.y, ctx: Life.summary() });
+    });
+  }
+
   window.addEventListener('mousedown', e => {
     setCursor(e.clientX, e.clientY);
     if (e.button !== 0 || !overPet(e.clientX, e.clientY)) return;
-    down = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
-    hoverCheck();
+    onMouseDownPet(e);
   });
   window.addEventListener('mousemove', e => {
     setCursor(e.clientX, e.clientY);
-    if (down && !down.moved && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; startGrab(down.x, down.y); }
+    if (down && !down.moved && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) {
+      down.moved = true;
+      startGrab(down.x, down.y);
+      if (hitboxEl) hitboxEl.style.cursor = 'grabbing';
+    }
   });
   window.addEventListener('mouseup', e => {
     if (!down) return;
     const dn = down; down = null;
+    if (hitboxEl) hitboxEl.style.cursor = 'grab';
+    document.body.style.cursor = 'grab';
     if (dn.moved) release();
     else if (performance.now() - dn.t < 450) onClick(dn.x, dn.y);
     else if (P.mode === 'hold') decide();
@@ -1039,6 +1082,7 @@
   function startGrab(x, y) {
     const lx = (x - P.x) / S * P.face, ly = (y - P.y) / S;
     setMode('grab', { ox: x - P.x, oy: y - P.y, px: lx, py: ly });
+    if (hitboxEl) hitboxEl.style.cursor = 'grabbing';
     document.body.style.cursor = 'grabbing';
   }
   function release() {
@@ -1051,6 +1095,7 @@
     if (Math.hypot(vx, vy) > 700) say(Life.line(Life.mem && Life.mem.throws > 8 ? 'throw_many' : 'throw'), 1700);
     P.d.vr = clamp(vx * 0.004, -9, 9) + (wob ? 6 : 0);
     if (wob) P.afterLand = 'dizzy';
+    if (hitboxEl) hitboxEl.style.cursor = 'grab';
     document.body.style.cursor = 'grab';
   }
 
@@ -1197,6 +1242,7 @@
     for (const q of Director.itemParticles()) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
     for (const q of fx) { Rig.drawParticle(ctx, u, dpr, q); touch(q.x - 30, q.y - 30, q.x + 30, q.y + 30); }
     prevBox = box;
+    updateHitbox();
   }
 
   function frame(ts) {

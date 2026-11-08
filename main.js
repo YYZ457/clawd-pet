@@ -14,7 +14,7 @@ const TEST = process.env.CLAWD_SHOT; // 自测:截图后退出
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 
 let win = null, tray = null, ps = null, domServer = null;
-const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', keyEnc: '', keyPlain: '', dailyCalls: 40, dailyTokens: 80000 };
+const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', keyEnc: '', keyPlain: '', dailyCalls: 40, dailyTokens: 80000 };
 let settings = { scale: 4, quiet: false, autostart: false, sense: true, llm: Object.assign({}, LLM_DEFAULT) };
 let chatWin = null, setWin = null, replyResolve = null, lastCtx = '', lastPet = { x: 400, y: 300 };
 let lastFg = '';
@@ -44,7 +44,7 @@ function createWindow() {
   win = new BrowserWindow({
     x: b.x, y: b.y, width: b.width, height: b.height - 1,
     transparent: true, frame: false, resizable: false, movable: false, minimizable: false, maximizable: false,
-    hasShadow: false, skipTaskbar: true, focusable: false, alwaysOnTop: true, show: false, fullscreenable: false,
+    hasShadow: false, skipTaskbar: true, focusable: true, alwaysOnTop: true, show: false, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
   });
   win.setAlwaysOnTop(true, 'screen-saver');
@@ -317,7 +317,11 @@ async function handleContinue(st) {
 }
 
 function openChat(opts = {}) {
-  if (chatWin && !chatWin.isDestroyed()) { const was = chatWin; chatWin = null; was.close(); if (!opts.force) return; }
+  const now = Date.now();
+  if (chatWin && !chatWin.isDestroyed()) {
+    if (chatWin._openedAt && now - chatWin._openedAt < 500) return;
+    const was = chatWin; chatWin = null; was.close(); if (!opts.force) return;
+  }
   const mode = opts.mode === 'reply' ? 'reply' : 'talk';
   const w = 340, h = mode === 'reply' ? 150 : 262;
   const d = display(), b = d.bounds, wa = d.workArea;
@@ -329,11 +333,16 @@ function openChat(opts = {}) {
     x, y, width: w, height: h, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
+  cw._openedAt = now;
   chatWin = cw;
   cw.setAlwaysOnTop(true, 'screen-saver');
   cw.loadFile(path.join(__dirname, 'renderer', 'chat.html'), { query: { mode, q: opts.question || '' } });
   cw.once('ready-to-show', () => { cw.show(); try { app.focus({ steal: true }); } catch (_) {} cw.focus(); });
-  cw.on('blur', () => setTimeout(() => { if (!cw.isDestroyed() && !cw.isFocused()) cw.close(); }, 300));
+  cw.on('blur', () => setTimeout(() => {
+    if (!cw.isDestroyed() && !cw.isFocused() && Date.now() - (cw._openedAt || 0) > 800) {
+      cw.close();
+    }
+  }, 300));
   cw.on('closed', () => {
     if (chatWin === cw) chatWin = null;
     if (replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
@@ -367,7 +376,9 @@ ipcMain.on('chat:reply', (_e, text) => { if (replyResolve) { const r = replyReso
 ipcMain.on('chat:close', () => { if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
 ipcMain.on('chat:settings', () => { openSettings(); if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
 ipcMain.on('chat:open', (_e, o) => { if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); } openChat({ x: lastPet.x, y: lastPet.y }); });
-ipcMain.on('pet:report', (_e, o) => { if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); } });
+ipcMain.on('pet:report', (_e, o) => {
+  if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); }
+});
 ipcMain.handle('ask-text', (_e, q) => askText(q));
 ipcMain.handle('story:continue', (_e, st) => handleContinue(st));
 ipcMain.handle('set:get', () => llmPublic());
@@ -392,7 +403,8 @@ ipcMain.handle('set:test', async () => {
   if (!key) return { ok: false, error: '还没填 Key' };
   const t0 = Date.now();
   try {
-    const r = await llm.chat({ baseUrl: c.baseUrl, model: c.model, key }, [{ role: 'user', content: '只回复这个 JSON:{"kind":"chat","say":"ok"}' }], { maxTokens: 24, timeout: 20000 });
+    const model = (c.model && c.model.trim()) || 'deepseek-flash';
+    const r = await llm.chat({ baseUrl: c.baseUrl, model, key }, [{ role: 'user', content: 'Say ok' }], { json: false, maxTokens: 60, timeout: 25000 });
     addUsage(r.tokens);
     return { ok: true, ms: Date.now() - t0 };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
@@ -472,7 +484,12 @@ function createTray() {
 ipcMain.handle('info', () => info());
 ipcMain.handle('mem:get', () => loadMemory());
 ipcMain.on('mem:set', (_e, m) => { if (m && typeof m === 'object') saveMemory(m); });
-ipcMain.on('ignore', (_e, v) => { if (win && !win.isDestroyed()) { if (v) win.setIgnoreMouseEvents(true, { forward: true }); else win.setIgnoreMouseEvents(false); } });
+ipcMain.on('ignore', (_e, v) => {
+  if (win && !win.isDestroyed()) {
+    if (v) win.setIgnoreMouseEvents(true, { forward: true });
+    else win.setIgnoreMouseEvents(false);
+  }
+});
 
 app.on('second-instance', () => { hiddenByUser = false; applyVisibility(); send('summon'); });
 app.on('window-all-closed', () => { app.quit(); });
