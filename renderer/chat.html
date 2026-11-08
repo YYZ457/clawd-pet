@@ -18,6 +18,7 @@
   input:focus { border-color: var(--o); }
   .go { border: 2px solid var(--ink); border-radius: 9px; background: var(--o); color: #fff; font-weight: 700; padding: 0 12px; }
   .go:disabled { opacity: .5; cursor: default; }
+  .go.ghost { background: #fff; color: var(--ink); }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; }
   .chip { border: 1.5px solid var(--ink); border-radius: 999px; background: #fff3ea; padding: 2px 9px; font-size: 12px; color: var(--ink); }
   .chip:hover { background: #ffe3d2; }
@@ -31,7 +32,7 @@
 <div class="card">
   <div class="top"><div id="title">和 Clawd 说话<small id="quota"></small></div><button class="gear" id="gear" title="大模型设置">⚙</button></div>
   <div id="q" class="q" hidden></div>
-  <div class="row"><input id="inp" maxlength="120" autocomplete="off" spellcheck="false" placeholder="演一出海盗寻宝 / 学个害羞转圈的动作 / 随便聊聊…"><button class="go" id="send">发送</button></div>
+  <div class="row"><input id="inp" maxlength="120" autocomplete="off" spellcheck="false" placeholder="演一出海盗寻宝 / 学个害羞转圈的动作 / 随便聊聊…"><button class="go" id="send">发送</button><button class="go ghost" id="skip" hidden>跳过</button></div>
   <div id="more">
     <div class="lab">试试这些(不需要 Key):</div>
     <div class="chips" id="builtin"></div>

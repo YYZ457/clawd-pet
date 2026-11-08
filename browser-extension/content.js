@@ -17,7 +17,7 @@
       if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue;
       const l = Math.max(0, r.left), w = Math.min(vw, r.right) - l;
       if (w < 70) continue;
-      rects.push([idOf(el), Math.round(l), Math.round(r.top), Math.round(w)]);
+      rects.push([idOf(el), Math.round(l), Math.round(r.top), Math.round(w), Math.round(r.height)]);
     }
     return rects;
   }

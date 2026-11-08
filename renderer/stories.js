@@ -37,12 +37,12 @@
   };
 
   S.hide = {
-    title: '躲猫猫', desc: '你用鼠标藏起来,它来找你',
+    title: '躲猫猫', desc: '把鼠标藏起来,它会跳上跳下找你',
     script: {
       kind: 'story', title: '躲猫猫', nodes: [
         { id: 'a', t: 'say', text: '来玩躲猫猫吧!' },
         { id: 'b', t: 'ask', text: '你要躲起来吗?', choices: [{ text: '好呀!', next: 'c' }, { text: '不要~', next: 'no' }] },
-        { id: 'c', t: 'say', text: '我闭眼数三下,你把鼠标藏远点~', ms: 2200 },
+        { id: 'c', t: 'say', text: '我闭眼数三下,你把鼠标藏远点~屏幕的角落、窗口上面都行!', ms: 3200 },
         { id: 'c2', t: 'anim', dur: 0.9, hold: true, keys: [{ t: 0, eye: 'closed', armL: [-2, -3, 3], armR: [-2, -3, 3] }] },
         { id: 'c3', t: 'fx', kind: 'text', n: 1, text: '1' },
         { id: 'c4', t: 'wait', sec: 1 },
@@ -50,19 +50,72 @@
         { id: 'c6', t: 'wait', sec: 1 },
         { id: 'c7', t: 'fx', kind: 'text', n: 1, text: '3' },
         { id: 'c8', t: 'wait', sec: 1 },
-        { id: 'c9', t: 'say', text: '我来找你啦!', ms: 1400 },
+        { id: 'c9', t: 'say', text: '藏好了吗?鼠标不动才算藏好哦~', ms: 2000, pose: { eye: 'open' } },
+        { id: 'c10', t: 'wait_for', what: 'still', sec: 9, next: 'c11', timeout: 'c11' },
+        { id: 'c11', t: 'set', vars: { tries: '+1' } },
+        { id: 'd0', t: 'say', text: '我来找你啦!', ms: 1300, pose: { eye: 'wide', mouth: 'cat' } },
+        { id: 'd0a', t: 'anim', dur: 1.6, keys: [{ t: 0, ex: -1, eye: 'wide' }, { t: 0.35, ex: 1, ey: -1 }, { t: 0.7, ex: -1, ey: 1 }, { t: 1, ex: 0, ey: 0 }] },
         { id: 'd1', t: 'move', to: 'cursor', run: true },
         { id: 'd2', t: 'anim', dur: 1.2, keys: [{ t: 0, eye: 'wide', mouth: 'big', lift: 4, armL: [1, -6, 3], armR: [1, -6, 3] }, { t: 1, eye: 'happy', mouth: 'big', blush: 1 }] },
         { id: 'd3', t: 'fx', kind: 'confetti', n: 8 },
         { id: 'd4', t: 'say', text: '抓到你啦!', ms: 1600 },
+        { id: 'd4a', t: 'if', key: 'tries', op: '>=', value: '3', then: 'd4b', else: 'd5' },
+        { id: 'd4b', t: 'say', text: '玩了 {tries} 次啦,你躲得越来越刁钻!', ms: 2400 },
         { id: 'd5', t: 'ask', text: '再玩一次吗?', choices: [{ text: '再来!', next: 'c' }, { text: '不玩了', next: 'bye' }] },
         { id: 'bye', t: 'say', text: '好吧~下次再玩!', next: 'Z' },
         { id: 'no', t: 'say', text: '那我自己躲…', next: 'no2' },
         { id: 'no2', t: 'anim', dur: 1.5, keys: [{ t: 0, eye: 'closed' }, { t: 1, eye: 'closed', sy: 0.7, blush: 0.8 }] },
-        { id: 'no3', t: 'wait_for', what: 'click', sec: 12, next: 'no4', timeout: 'no5' },
+        { id: 'no2b', t: 'move', to: 'window' },
+        { id: 'no3', t: 'wait_for', what: 'click', sec: 14, next: 'no4', timeout: 'no5' },
         { id: 'no4', t: 'say', text: '被你发现啦!', next: 'Z' },
         { id: 'no5', t: 'say', text: '…你找不到我吧?(嘿嘿)', next: 'Z' },
         { id: 'Z', t: 'end', text: '《躲猫猫》完~' }
+      ]
+    }
+  };
+
+  S.pirate = {
+    title: '海盗寻宝', desc: '换装、窗口间探险、变量和多个结局',
+    script: {
+      kind: 'story', title: '海盗寻宝', nodes: [
+        { id: 'a', t: 'say', text: '啊哈!海盗船长 Clawd 出航啦!', pose: { eye: 'happy', mouth: 'big' } },
+        { id: 'a1', t: 'wear', hat: 'redcap' },
+        { id: 'a2', t: 'tint', color: 'sunset', a: 0.16 },
+        { id: 'b', t: 'ask_text', text: '船员!报上你的大名!', key: 'who', next: 'b2' },
+        { id: 'b2', t: 'say', text: '{who}!好名字!一起找宝藏!', fx: 'heart' },
+        { id: 'c', t: 'item', emoji: '🗺️', at: 'near', key: 'map' },
+        { id: 'c1', t: 'take', key: 'map' },
+        { id: 'c2', t: 'anim', dur: 2, keys: [{ t: 0, eye: 'wide', ex: -1 }, { t: 0.5, eye: 'wide', ex: 1, ey: -1 }, { t: 1, eye: 'open', ex: 0 }] },
+        { id: 'd', t: 'ask', text: '藏宝图说…宝藏在哪?', choices: [{ text: '高处', next: 'up1', set: { luck: '+1' } }, { text: '低处', next: 'dn1' }, { text: '随缘', next: 'rd' }] },
+        { id: 'rd', t: 'random', to: ['up1', 'dn1', 'wn1'] },
+        { id: 'up1', t: 'say', text: '去高处看看!', pose: { armR: [1, -6, 3] } },
+        { id: 'up2', t: 'move', to: 'up', run: true, next: 'j' },
+        { id: 'dn1', t: 'say', text: '说不定埋在下面!' },
+        { id: 'dn2', t: 'move', to: 'down', next: 'j' },
+        { id: 'wn1', t: 'say', text: '随便找个窗口登陆!' },
+        { id: 'wn2', t: 'move', to: 'window', run: true },
+        { id: 'j', t: 'fx', kind: 'question' },
+        { id: 'j1', t: 'say', text: '这里…好像有光!', pose: { eye: 'wide', mouth: 'o' } },
+        { id: 'j2', t: 'item', emoji: '💎', at: 'near', key: 'gem' },
+        { id: 'j3', t: 'ask', text: '要挖吗?', choices: [{ text: '挖!', next: 'k1', set: { gold: '+3' } }, { text: '再等等', next: 'k2' }] },
+        { id: 'k1', t: 'anim', dur: 1.4, loop: 2, keys: [{ t: 0, sy: 0.8, lift: 0 }, { t: 0.5, sy: 1.1, lift: 1.5 }, { t: 1, sy: 0.8 }] },
+        { id: 'k1b', t: 'fx', kind: 'dust', n: 6 },
+        { id: 'k1c', t: 'take', key: 'gem', next: 'm' },
+        { id: 'k2', t: 'wait_for', what: 'near', sec: 8, next: 'k3', timeout: 'k4' },
+        { id: 'k3', t: 'say', text: '你靠近啦,我们一起挖!', fx: 'heart', next: 'k1' },
+        { id: 'k4', t: 'say', text: '不挖?那我自己来!', next: 'k1' },
+        { id: 'm', t: 'fx', kind: 'fireworks', n: 3 },
+        { id: 'm1', t: 'say', text: '宝石到手!' , pose: { eye: 'happy', mouth: 'big' } },
+        { id: 'm2', t: 'if', key: 'luck', op: '>=', value: '1', then: 'm3', else: 'm4' },
+        { id: 'm3', t: 'say', text: '{who}选对了方向,运气满满!', fx: 'sparkle', next: 'n' },
+        { id: 'm4', t: 'say', text: '虽然绕了点路,还是找到啦!', next: 'n' },
+        { id: 'n', t: 'ask', text: '把宝石送给谁?', choices: [{ text: '送给{who}', next: 'o1' }, { text: '我自己留着', next: 'o2' }] },
+        { id: 'o1', t: 'move', to: 'cursor', run: true },
+        { id: 'o1b', t: 'say', text: '送你!最好的朋友~', fx: 'heart', next: 'z1' },
+        { id: 'o2', t: 'anim', dur: 1.6, keys: [{ t: 0, eye: 'closed', mouth: 'cat', blush: 1 }, { t: 1, eye: 'happy', mouth: 'cat', blush: 1, sy: 0.9 }] },
+        { id: 'o2b', t: 'say', text: '嘿嘿,是我的了~', next: 'z1' },
+        { id: 'z1', t: 'tint', color: 'none' },
+        { id: 'Z', t: 'end', text: '《海盗寻宝》完~' }
       ]
     }
   };

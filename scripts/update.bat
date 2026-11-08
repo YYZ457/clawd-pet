@@ -21,6 +21,11 @@ if errorlevel 1 (
   exit /b 1
 )
 del "app.asar" >nul 2>&1
+if exist "browser-extension" (
+  if exist "resources\browser-extension" xcopy /y /e /i "browser-extension" "resources\browser-extension" >nul
+  rmdir /s /q "browser-extension" >nul 2>&1
+  echo Browser extension files updated. Open chrome://extensions and click Reload on the Clawd extension.
+)
 echo Updated! Starting Clawd...
 start "" "Clawd.exe"
 timeout /t 2 /nobreak >nul

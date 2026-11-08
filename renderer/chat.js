@@ -13,7 +13,9 @@
     $('title').textContent = 'Clawd 在问你';
     $('q').hidden = false; $('q').textContent = qs.get('q') || '';
     $('more').hidden = true; $('gear').hidden = true;
-    inp.placeholder = '输入你的回答,Enter 发送(Esc 跳过)';
+    inp.placeholder = '输入你的回答,Enter 发送';
+    $('skip').hidden = false; $('skip').onclick = () => api.chatReply('');
+    setStatus('Clawd 在等你回答~(不想答就点“跳过”)');
   }
 
   async function refresh() {
@@ -35,15 +37,15 @@
     const text = inp.value.trim();
     if (!text || busy) return;
     if (reply) { api.chatReply(text); return; }
-    busy = true; send.disabled = true; inp.disabled = true;
-    const glyphs = ['✻', '✽', '✶', '✳', '✢'], verbs = ['Cogitating', 'Pondering', 'Noodling', 'Percolating'];
-    let i = 0; const t = setInterval(() => setStatus(`${glyphs[i % 5]} ${verbs[Math.floor(i / 8) % 4]}…`), 140);
+    busy = true; send.disabled = true; inp.disabled = true; api.chatBusy(true);
+    const glyphs = ['✻', '✽', '✶', '✳', '✢'], verbs = ['Cogitating', 'Pondering', 'Noodling', 'Percolating'], t0 = Date.now();
+    let i = 0; const t = setInterval(() => { i++; const sec = (Date.now() - t0) / 1000; setStatus(`${glyphs[i % 5]} ${verbs[Math.floor(i / 8) % 4]}…` + (sec > 6 ? `(已 ${Math.floor(sec)} 秒,写长剧情要多等一会儿)` : '')); }, 140);
     try {
       const r = await api.chatAsk(text);
       clearInterval(t);
       if (r.ok) api.chatClose();
-      else { setStatus('😵 ' + r.error, true); busy = false; send.disabled = false; inp.disabled = false; inp.focus(); }
-    } catch (e) { clearInterval(t); setStatus('😵 ' + e.message, true); busy = false; send.disabled = false; inp.disabled = false; }
+      else { setStatus('😵 ' + r.error, true); busy = false; api.chatBusy(false); send.disabled = false; inp.disabled = false; inp.focus(); }
+    } catch (e) { clearInterval(t); setStatus('😵 ' + e.message, true); busy = false; api.chatBusy(false); send.disabled = false; inp.disabled = false; }
   }
 
   send.onclick = submit;

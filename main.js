@@ -14,7 +14,7 @@ const TEST = process.env.CLAWD_SHOT; // 自测:截图后退出
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 
 let win = null, tray = null, ps = null, domServer = null;
-const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', keyEnc: '', keyPlain: '', dailyCalls: 40, dailyTokens: 80000 };
+const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', keyEnc: '', keyPlain: '', dailyCalls: 60, dailyTokens: 600000, maxTokens: 8000 };
 let settings = { scale: 4, quiet: false, autostart: false, sense: true, llm: Object.assign({}, LLM_DEFAULT) };
 let chatWin = null, setWin = null, replyResolve = null, lastCtx = '', lastPet = { x: 400, y: 300 };
 let lastFg = '';
@@ -23,7 +23,13 @@ let lastWinJson = '';
 
 // ------------------------------------------------------------ 设置
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-function loadSettings() { try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))); } catch (_) {} settings.llm = Object.assign({}, LLM_DEFAULT, settings.llm || {}); }
+function loadSettings() {
+  try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))); } catch (_) {}
+  const c = settings.llm = Object.assign({}, LLM_DEFAULT, settings.llm || {});
+  c.model = llm.normalizeModel(c.model, c.baseUrl);                        // 旧模型名 deepseek-chat 已下线 → 自动换成 deepseek-flash
+  if (c.dailyCalls === 40 && c.dailyTokens === 80000) { c.dailyCalls = LLM_DEFAULT.dailyCalls; c.dailyTokens = LLM_DEFAULT.dailyTokens; }   // 旧默认额度太小,剧情变长后不够用
+  c.maxTokens = clampN(Math.round(Number(c.maxTokens)) || LLM_DEFAULT.maxTokens, 1000, 32000);
+}
 function saveSettings() { try { fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); fs.writeFileSync(settingsFile(), JSON.stringify(settings)); } catch (_) {} }
 
 // ------------------------------------------------------------ 记忆(只存在本机)
@@ -44,7 +50,7 @@ function createWindow() {
   win = new BrowserWindow({
     x: b.x, y: b.y, width: b.width, height: b.height - 1,
     transparent: true, frame: false, resizable: false, movable: false, minimizable: false, maximizable: false,
-    hasShadow: false, skipTaskbar: true, focusable: true, alwaysOnTop: true, show: false, fullscreenable: false,
+    hasShadow: false, skipTaskbar: true, focusable: false, alwaysOnTop: true, show: false, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
   });
   win.setAlwaysOnTop(true, 'screen-saver');
@@ -233,9 +239,10 @@ function handleDom(m) {
   const vx0 = m.screenX + border - b.x;
   const vy0 = m.screenY + Math.max(0, m.outerH - m.innerH * Z - border) - b.y;
   const out = [];
-  for (const r of m.rects) {                         // [id, left, top, width]
-    const x1 = vx0 + r[1] * Z, y = vy0 + r[2] * Z, w = r[3] * Z;
-    out.push({ id: r[0], x1: Math.round(x1), x2: Math.round(x1 + w), y: Math.round(y) });
+  for (const r of m.rects) {                         // [id, left, top, width, height?]
+    const x1 = vx0 + r[1] * Z, y = vy0 + r[2] * Z, w = r[3] * Z, o = { id: r[0], x1: Math.round(x1), x2: Math.round(x1 + w), y: Math.round(y) };
+    if (Number(r[4]) > 0) o.y2 = Math.round(y + r[4] * Z);
+    out.push(o);
   }
   win.webContents.send('dom', out);
 }
@@ -266,64 +273,88 @@ function addUsage(tokens) {
   const u = usage(); u.calls++; u.tokens += tokens || 0;
   try { fs.mkdirSync(path.dirname(usageFile()), { recursive: true }); fs.writeFileSync(usageFile(), JSON.stringify(u)); } catch (_) {}
 }
-async function runLLM(messages, opt = {}) {
-  const c = settings.llm, key = getKey();
-  if (!c.enabled) throw new llm.LLMError('还没开启大模型(托盘 → 大模型设置)', 'off');
-  if (!key) throw new llm.LLMError('还没填 API Key(点聊天框右上角 ⚙)', 'nokey');
-  const u = usage();
-  if (u.calls >= c.dailyCalls || u.tokens >= c.dailyTokens) throw new llm.LLMError('今天的额度用完啦(设置里可以调整)', 'budget');
-  const r = await llm.chat({ baseUrl: c.baseUrl, model: c.model, key }, messages, { maxTokens: opt.maxTokens || 900 });
-  addUsage(r.tokens);
-  return r;
-}
 const toOverlay = (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); };
 const setThinking = on => toOverlay('thinking', !!on);
+const errMsg = e => (e && e.message) || String(e);
+
+// ---- 一次"生成":流式请求,每写完一个节点就送去演;chat/skill 这类短回答则整段送
+let gen = null, genSeq = 0;
+function abortGen() { if (gen) { const g = gen; gen = null; try { g.ctl.abort(); } catch (_) {} } }
+function checkLLM() {
+  const c = settings.llm;
+  if (!c.enabled) throw new llm.LLMError('还没开启大模型(托盘 → 大模型设置)', 'off');
+  if (!getKey()) throw new llm.LLMError('还没填 API Key(点聊天框右上角 ⚙)', 'nokey');
+  const u = usage();
+  if (u.calls >= c.dailyCalls || u.tokens >= c.dailyTokens) throw new llm.LLMError('今天的额度用完啦(设置里可以调整)', 'budget');
+}
+function startGen(messages, o = {}) {
+  checkLLM(); abortGen();
+  const c = settings.llm, id = ++genSeq, ctl = new AbortController(); gen = { id, ctl };
+  const ns = new llm.NodeStream(), ids = new Set();
+  let idx = 0, began = false, settled = false, sent = 0;
+  return new Promise(resolve => {
+    const settle = r => { if (!settled) { settled = true; resolve(r); } };
+    const onDelta = t => {
+      let raws; try { raws = ns.feed(t); } catch (_) { return; }
+      if (!raws.length || (ns.kind && ns.kind !== 'story')) return;
+      const clean = [];
+      for (const r of raws) { if (sent + clean.length >= ScriptTools.MAX_NODES) break; const n = ScriptTools.sanitizeNode(r, idx++, ids); if (n) clean.push(n); }
+      if (!clean.length) return;
+      if (!began) { began = true; toOverlay('gen:begin', { id, cont: !!o.cont, title: String(ns.title || '').replace(/[\u0000-\u001f<>]/g, '').slice(0, 16), premise: String(o.premise || '').slice(0, 80) }); settle({ ok: true, kind: 'story', streaming: true }); }
+      sent += clean.length; toOverlay('gen:nodes', { id, nodes: clean });
+    };
+    llm.chatStream({ baseUrl: c.baseUrl, model: c.model, key: getKey() }, messages, { maxTokens: c.maxTokens }, onDelta)
+      .then(r => {
+        addUsage(r.tokens); if (gen && gen.id === id) gen = null;
+        if (began) { toOverlay('gen:end', { id, ok: true, finish: r.finish }); return; }
+        try {
+          const obj = llm.extractJSON(r.text), chk = ScriptTools.sanitize(obj);
+          if (!chk.ok) throw new llm.LLMError('它写的剧本我看不懂:' + chk.error, 'format');
+          toOverlay('story', { payload: obj, premise: String(o.premise || '').slice(0, 80), cont: !!o.cont, truncated: r.finish === 'length' });
+          settle({ ok: true, kind: chk.kind });
+        } catch (e) { settle({ ok: false, error: errMsg(e) }); }
+      })
+      .catch(e => {
+        addUsage(Math.ceil((JSON.stringify(messages).length + ns.buf.length) / 1.5)); if (gen && gen.id === id) gen = null;
+        if (began) toOverlay('gen:end', { id, ok: false, error: errMsg(e) });
+        settle({ ok: false, error: errMsg(e) });
+      });
+    ctl.signal.addEventListener('abort', () => settle({ ok: false, error: '已取消' }), { once: true });
+  });
+}
 
 async function handleAsk(text) {
   text = String(text || '').trim().slice(0, 200);
   if (!text) return { ok: false, error: '说点什么吧~' };
   let t = text;
-  if (/^\/演/.test(t)) t = '演一出互动小剧场:' + t.slice(2);
+  if (/^\/演/.test(t)) t = '演一出内容丰富的互动小剧场(多分支多结局,多用动作/道具/特效/追鼠标/跳窗口):' + t.slice(2);
   else if (/^\/学/.test(t)) t = '学一个新动作:' + t.slice(2);
   else if (/^\/聊/.test(t)) t = '闲聊:' + t.slice(2);
   setThinking(true);
-  try {
-    const r = await runLLM(llm.buildAsk(lastCtx, t));
-    const obj = llm.extractJSON(r.text);
-    const chk = ScriptTools.sanitize(obj);
-    if (!chk.ok) throw new llm.LLMError('它写的剧本我看不懂:' + chk.error, 'format');
-    toOverlay('story', { payload: obj, premise: text.slice(0, 80) });
-    return { ok: true, kind: chk.kind };
-  } catch (e) {
-    const msg = (e && e.message) || String(e);
-    toOverlay('say', '😵 ' + msg);
-    return { ok: false, error: msg };
-  } finally { setThinking(false); }
+  try { return await startGen(llm.buildAsk(lastCtx, t), { premise: text }); }
+  catch (e) { const msg = errMsg(e); toOverlay('say', '😵 ' + msg); return { ok: false, error: msg }; }
+  finally { setThinking(false); }
 }
 
 async function handleContinue(st) {
   st = st || {};
+  const vars = {}; if (st.vars && typeof st.vars === 'object') for (const k of Object.keys(st.vars).slice(0, 8)) vars[String(k).slice(0, 10)] = String(st.vars[k]).slice(0, 12);
   const clean = {
-    title: String(st.title || '').slice(0, 16), premise: String(st.premise || '').slice(0, 80), hint: String(st.hint || '').slice(0, 80),
-    seg: clampN(Number(st.seg) || 1, 1, 5), maxSeg: 4, log: Array.isArray(st.log) ? st.log.slice(-8).map(x => String(x).slice(0, 40)) : []
+    title: String(st.title || '').slice(0, 16), premise: String(st.premise || '').slice(0, 80), hint: String(st.hint || '').slice(0, 120),
+    seg: clampN(Number(st.seg) || 1, 1, 9), maxSeg: 8, vars, log: Array.isArray(st.log) ? st.log.slice(-12).map(x => String(x).slice(0, 40)) : []
   };
-  try {
-    const r = await runLLM(llm.buildContinue(lastCtx, clean));
-    const obj = llm.extractJSON(r.text);
-    const chk = ScriptTools.sanitize(obj);
-    if (!chk.ok) throw new llm.LLMError('续写的剧本不对:' + chk.error, 'format');
-    return { ok: true, payload: obj };
-  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  try { return await startGen(llm.buildContinue(lastCtx, clean), { cont: true, premise: clean.premise }); }
+  catch (e) { return { ok: false, error: errMsg(e) }; }
 }
 
 function openChat(opts = {}) {
   const now = Date.now();
   if (chatWin && !chatWin.isDestroyed()) {
-    if (chatWin._openedAt && now - chatWin._openedAt < 500) return;
+    if (!opts.force && chatWin._openedAt && now - chatWin._openedAt < 500) return;      // 防止"一开就被当成再点一次而关掉"
     const was = chatWin; chatWin = null; was.close(); if (!opts.force) return;
   }
   const mode = opts.mode === 'reply' ? 'reply' : 'talk';
-  const w = 340, h = mode === 'reply' ? 150 : 262;
+  const w = 340, h = mode === 'reply' ? 164 : 262;
   const d = display(), b = d.bounds, wa = d.workArea;
   const px = b.x + (opts.x != null ? opts.x : lastPet.x), py = b.y + (opts.y != null ? opts.y : lastPet.y);
   let x = Math.round(px + 48), y = Math.round(py - h - 24);
@@ -333,31 +364,37 @@ function openChat(opts = {}) {
     x, y, width: w, height: h, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
-  cw._openedAt = now;
+  cw._openedAt = now; cw._mode = mode; cw._busy = false;
   chatWin = cw;
   cw.setAlwaysOnTop(true, 'screen-saver');
   cw.loadFile(path.join(__dirname, 'renderer', 'chat.html'), { query: { mode, q: opts.question || '' } });
-  cw.once('ready-to-show', () => { cw.show(); try { app.focus({ steal: true }); } catch (_) {} cw.focus(); });
+  const grab = () => { if (cw.isDestroyed()) return; try { app.focus({ steal: true }); } catch (_) {} cw.focus(); };
+  cw.once('ready-to-show', () => { cw.show(); grab(); setTimeout(grab, 180); setTimeout(grab, 600); });   // Windows 有"前台锁",多试几次
+  // 失焦自动关闭:只对"聊天框"生效,且不会在刚打开 / 正在等回答 / 正在等你回答剧情提问时误关
   cw.on('blur', () => setTimeout(() => {
-    if (!cw.isDestroyed() && !cw.isFocused() && Date.now() - (cw._openedAt || 0) > 800) {
-      cw.close();
-    }
+    if (cw.isDestroyed() || cw.isFocused()) return;
+    if (cw._mode === 'reply' || cw._busy) return;
+    if (Date.now() - cw._openedAt < 900) return;
+    cw.close();
   }, 300));
   cw.on('closed', () => {
     if (chatWin === cw) chatWin = null;
-    if (replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
+    if (cw._mode === 'reply' && replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
   });
 }
 function askText(q) {
   return new Promise(res => {
     if (replyResolve) { const r = replyResolve; replyResolve = null; r(null); }
-    replyResolve = res; openChat({ mode: 'reply', question: String(q || '').slice(0, 40), force: true });
+    let done = false;
+    const fin = v => { if (done) return; done = true; clearTimeout(tm); res(v); };
+    const tm = setTimeout(() => { if (replyResolve === fin) replyResolve = null; fin(null); if (chatWin && !chatWin.isDestroyed() && chatWin._mode === 'reply') chatWin.close(); }, 150000);
+    replyResolve = fin; openChat({ mode: 'reply', question: String(q || '').slice(0, 60), force: true });
   });
 }
 function openSettings() {
   if (setWin && !setWin.isDestroyed()) { setWin.focus(); return; }
   setWin = new BrowserWindow({
-    width: 440, height: 560, title: 'Clawd × 大模型设置', autoHideMenuBar: true, resizable: false, minimizable: false, maximizable: false,
+    width: 440, height: 660, title: 'Clawd × 大模型设置', autoHideMenuBar: true, resizable: false, minimizable: false, maximizable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
   setWin.setMenu(null);
@@ -366,13 +403,15 @@ function openSettings() {
 }
 function llmPublic() {
   const c = settings.llm;
-  return { enabled: c.enabled, baseUrl: c.baseUrl, model: c.model, dailyCalls: c.dailyCalls, dailyTokens: c.dailyTokens, hasKey: !!getKey(), used: usage(), encrypted: (() => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } })() };
+  return { enabled: c.enabled, baseUrl: c.baseUrl, model: c.model, dailyCalls: c.dailyCalls, dailyTokens: c.dailyTokens, maxTokens: c.maxTokens, hasKey: !!getKey(), used: usage(), encrypted: (() => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } })() };
 }
 
 ipcMain.handle('chat:status', () => Object.assign(llmPublic(), { builtin: Stories.list }));
 ipcMain.handle('chat:ask', (_e, text) => handleAsk(text));
 ipcMain.on('chat:builtin', (_e, id) => { const s = Stories.get(String(id)); if (s) toOverlay('story', { payload: s, premise: '内置:' + id }); if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
 ipcMain.on('chat:reply', (_e, text) => { if (replyResolve) { const r = replyResolve; replyResolve = null; r(String(text || '').slice(0, 40)); } if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
+ipcMain.on('chat:busy', (_e, v) => { if (chatWin && !chatWin.isDestroyed()) chatWin._busy = !!v; });
+ipcMain.on('gen:abort', () => abortGen());
 ipcMain.on('chat:close', () => { if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
 ipcMain.on('chat:settings', () => { openSettings(); if (chatWin && !chatWin.isDestroyed()) chatWin.close(); });
 ipcMain.on('chat:open', (_e, o) => { if (o) { lastPet = { x: Number(o.x) || lastPet.x, y: Number(o.y) || lastPet.y }; if (typeof o.ctx === 'string') lastCtx = o.ctx.slice(0, 300); } openChat({ x: lastPet.x, y: lastPet.y }); });
@@ -390,9 +429,10 @@ ipcMain.handle('set:save', (_e, o) => {
     if (!/^https:\/\//i.test(u) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(u)) return { ok: false, error: '地址必须以 https:// 开头(本机测试可用 http://127.0.0.1)' };
     c.baseUrl = u.slice(0, 200);
   }
-  if (typeof o.model === 'string' && o.model.trim()) c.model = o.model.trim().slice(0, 60);
-  if (o.dailyCalls != null) c.dailyCalls = clampN(Math.round(Number(o.dailyCalls)) || 40, 1, 500);
-  if (o.dailyTokens != null) c.dailyTokens = clampN(Math.round(Number(o.dailyTokens)) || 80000, 1000, 2000000);
+  if (typeof o.model === 'string' && o.model.trim()) c.model = llm.normalizeModel(o.model.trim().slice(0, 60), c.baseUrl);
+  if (o.maxTokens != null) c.maxTokens = clampN(Math.round(Number(o.maxTokens)) || 8000, 1000, 32000);
+  if (o.dailyCalls != null) c.dailyCalls = clampN(Math.round(Number(o.dailyCalls)) || 60, 1, 1000);
+  if (o.dailyTokens != null) c.dailyTokens = clampN(Math.round(Number(o.dailyTokens)) || 600000, 1000, 20000000);
   if (o.clearKey) setKey('');
   else if (typeof o.key === 'string' && o.key.trim()) setKey(o.key.trim());
   saveSettings();
@@ -403,10 +443,10 @@ ipcMain.handle('set:test', async () => {
   if (!key) return { ok: false, error: '还没填 Key' };
   const t0 = Date.now();
   try {
-    const model = (c.model && c.model.trim()) || 'deepseek-flash';
+    const model = llm.normalizeModel(c.model, c.baseUrl);
     const r = await llm.chat({ baseUrl: c.baseUrl, model, key }, [{ role: 'user', content: 'Say ok' }], { json: false, maxTokens: 60, timeout: 25000 });
     addUsage(r.tokens);
-    return { ok: true, ms: Date.now() - t0 };
+    return { ok: true, ms: Date.now() - t0, model };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
@@ -492,7 +532,7 @@ ipcMain.on('ignore', (_e, v) => {
 });
 
 app.on('second-instance', () => { hiddenByUser = false; applyVisibility(); send('summon'); });
-app.on('window-all-closed', () => { app.quit(); });
+app.on('window-all-closed', () => { abortGen(); app.quit(); });
 app.on('before-quit', () => { try { if (ps) ps.kill(); } catch (_) {} try { if (domServer) domServer.close(); } catch (_) {} });
 
 app.whenReady().then(() => {
@@ -512,13 +552,27 @@ app.whenReady().then(() => {
 // ------------------------------------------------------------ 自测(只在 CLAWD_SELFTEST=1 时运行)
 function selfTest() {
   const out = process.env.CLAWD_SELFTEST_OUT || path.join(app.getPath('userData'), 'selftest.json');
-  Object.assign(settings.llm, { enabled: true, baseUrl: process.env.CLAWD_LLM_URL, model: 'mock', dailyCalls: 50 });
+  const before = llmPublic();                                     // 迁移后的设置(旧版 settings.json 预置时用来验证)
+  Object.assign(settings.llm, { enabled: true, baseUrl: process.env.CLAWD_LLM_URL, dailyCalls: 50 });
+  if (process.env.CLAWD_SELFTEST_MODEL) settings.llm.model = process.env.CLAWD_SELFTEST_MODEL;
   setKey('sk-test');
+  const events = [], t0 = Date.now(), orig = win.webContents.send.bind(win.webContents);
+  win.webContents.send = (ch, v) => {
+    if (/^(gen:|story|thinking|say)/.test(ch)) events.push({ t: Date.now() - t0, ch, n: v && v.nodes ? v.nodes.length : undefined, err: v && v.error, ok: v && v.ok, title: v && v.title, kind: v && v.payload ? v.payload.kind : undefined, text: ch === 'say' ? v : undefined });
+    return orig(ch, v);
+  };
   win.webContents.on('did-finish-load', () => setTimeout(async () => {
-    const res = {};
-    res.ask = await handleAsk(process.env.CLAWD_SELFTEST_ASK || '演一出海盗寻宝');
-    await new Promise(r => setTimeout(r, 1500));
-    res.state = await win.webContents.executeJavaScript('JSON.stringify(window.__clawd.Director.state())').catch(e => String(e));
+    const res = { before, asks: [] };
+    const asks = JSON.parse(process.env.CLAWD_SELFTEST_ASKS || 'null') || [process.env.CLAWD_SELFTEST_ASK || '演一出海盗寻宝'];
+    for (const a of asks) {
+      const t1 = Date.now(), mark = events.length;
+      const r = await handleAsk(a);
+      const ms = Date.now() - t1;
+      await new Promise(rs => setTimeout(rs, Number(process.env.CLAWD_SELFTEST_WAIT || 2500)));
+      const state = await win.webContents.executeJavaScript('JSON.stringify(window.__clawd.Director.state())').catch(e => String(e));
+      res.asks.push({ ask: a, r, ms, state: JSON.parse(state), events: events.slice(mark).map(e => Object.assign({}, e, { t: e.t - (t1 - t0) })) });
+      await win.webContents.executeJavaScript('window.__clawd.Director.stop(true)').catch(() => {});
+    }
     res.usage = usage();
     res.status = llmPublic();
     fs.writeFileSync(out, JSON.stringify(res, null, 1));

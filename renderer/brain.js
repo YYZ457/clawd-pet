@@ -68,10 +68,22 @@
       }
       for (const s of segs) if (s[1] - s[0] >= petW * 0.9) L.push({ key: 'w' + w.id, kind: 'w', x1: s[0] + 2, x2: s[1] - 2, y, ax: w.l, ay: w.t });
     }
+    // 窗口的"下沿"也能踩(站在窗口底边上,比窗口顶更矮一些的"地面")
+    for (let i = 0; i < winList.length; i++) {
+      const w = winList[i], y = w.b;
+      if (w.b - w.t < petH * 1.5 + 24 || y < petH + 12 || y > groundY - 24) continue;
+      let segs = [[Math.max(0, w.l), Math.min(W, w.r)]];
+      for (let j = 0; j < i && segs.length; j++) {
+        const o = winList[j];
+        if (o.t <= y + 0.5 && o.b > y + 0.5) segs = subtract(segs, [o.l, o.r]);
+      }
+      for (const s of segs) if (s[1] - s[0] >= petW * 0.9) L.push({ key: 'wb' + w.id, kind: 'b', x1: s[0] + 2, x2: s[1] - 2, y, ax: w.l, ay: w.b });
+    }
     if (performance.now() - domStamp < 1600) {
       for (const d of domList) {
-        if (d.y < petH + 4 || d.y > groundY - 8) continue;
-        L.push({ key: 'd' + d.id, kind: 'd', x1: Math.max(0, d.x1), x2: Math.min(W, d.x2), y: d.y, ax: d.x1, ay: d.y });
+        if (d.y >= petH + 4 && d.y <= groundY - 8) L.push({ key: 'd' + d.id, kind: 'd', x1: Math.max(0, d.x1), x2: Math.min(W, d.x2), y: d.y, ax: d.x1, ay: d.y });
+        // 网页元素的下沿(需要新版浏览器插件;旧版没有 y2,自动忽略)
+        if (d.y2 && d.y2 - d.y >= 60 && d.y2 >= petH + 4 && d.y2 <= groundY - 8) L.push({ key: 'e' + d.id, kind: 'e', x1: Math.max(0, d.x1), x2: Math.min(W, d.x2), y: d.y2, ax: d.x1, ay: d.y2 });
       }
     }
     const newA = new Map();
@@ -965,6 +977,113 @@
     return { vx, vy: vy0, tag: 'jump' };
   }
 
+  // ---------------------------------------------------------------- 二维导航(躲猫猫 / 追鼠标 / 跳到别的窗口)
+  // 把所有平台当成一张图:能跳上去/跳下去就连一条边,BFS 找到离目标最近的平台,再一跳一跳过去。
+  const NAV = { hops: 0, leaped: false, bad: new Set(), moving: false, route: null };
+  function navReset() { NAV.hops = 0; NAV.leaped = false; NAV.bad = new Set(); NAV.moving = false; NAV.route = null; }
+  function landX(a, b, tx) {
+    const m = petW * 0.45;
+    let ivs = [[b.x1 + m, b.x2 - m]];
+    if (ivs[0][1] < ivs[0][0]) return null;
+    if (b.y > a.y + 4) {                                   // 往下跳:必须落在 a 的范围之外,否则会落回 a 上
+      const al = a.x1 - m * 0.5, ar = a.x2 + m * 0.5, out = [];
+      for (const [l, h] of ivs) { if (l < al) out.push([l, Math.min(h, al)]); if (h > ar) out.push([Math.max(l, ar), h]); }
+      ivs = out.filter(([l, h]) => h >= l);
+      if (!ivs.length) return null;
+    }
+    if (b.y - a.y < -300 * k) return null;                 // 太高了跳不上去(追人时可以大跳,比随机溜达的 190 更高)
+    const tl = a.x1 + m, tr = a.x2 - m, maxGap = 300 * k;
+    let best = null, bs = 1e18;
+    for (const [l, h] of ivs) {
+      const lo = Math.max(l, tl - maxGap), hi = Math.min(h, tr + maxGap); if (lo > hi) continue;   // 太远跳不到
+      const x = clamp(tx, lo, hi), gap = Math.max(0, x - tr, tl - x), sc = Math.abs(x - tx) + gap * 0.5;
+      if (sc < bs) { bs = sc; best = x; }
+    }
+    return best;
+  }
+  function bfs(from, tx) {
+    const map = new Map([[from, { hops: 0, prev: null, land: 0 }]]), q = [from];
+    for (let qi = 0; qi < q.length; qi++) {
+      const a = q[qi], ra = map.get(a); if (ra.hops >= 5) continue;
+      for (const b of plats) {
+        if (map.has(b) || b.x2 - b.x1 < petW * 0.9 || NAV.bad.has(a.key + '>' + b.key)) continue;
+        const lx = landX(a, b, tx); if (lx == null) continue;
+        map.set(b, { hops: ra.hops + 1, prev: a, land: lx }); q.push(b);
+      }
+    }
+    return map;
+  }
+  function navScore(p, tx, ty) {
+    const m = petW * 0.3, dxo = Math.max(0, p.x1 + m - tx, tx - (p.x2 - m)), dy = p.y - (ty + 5.5 * S);   // dy>0: 平台在目标下方(站在目标下面够得着)
+    return dxo + (dy >= 0 ? dy : -dy * 1.6) * 1.15;
+  }
+  function navPlan(from, tx, ty) {
+    const map = bfs(from, tx); let best = null, bs = 1e18;
+    for (const [p, r] of map) { const sc = navScore(p, tx, ty) + r.hops * 25 * k; if (sc < bs) { bs = sc; best = p; } }
+    const route = { from, t: now, hop: null };
+    if (!best || best === from) return route;
+    let cur = best, r = map.get(cur);
+    while (r.prev && r.prev !== from) { cur = r.prev; r = map.get(cur); }
+    route.hop = { to: cur, land: r.land, takeoff: clamp(r.land, from.x1 + petW * 0.45, from.x2 - petW * 0.45) };
+    return route;
+  }
+  /** 每帧调用一次:朝 (tx,ty) 走/跳。返回 'moving' | 'hopping' | 'arrived' | 'stuck' */
+  function navStep(tx, ty, o) {
+    o = o || {}; const dt = o.dt || 0.016, run = !!o.run;
+    NAV.moving = false;
+    if (P.mode !== 'story') return 'hopping';
+    const pl = P.plat; if (!pl) return 'hopping';
+    if (NAV.hops > 16) return 'stuck';
+    if (!NAV.route || NAV.route.from !== pl || now - NAV.route.t > 0.3) NAV.route = navPlan(pl, tx, ty);
+    const R = NAV.route, m = petW * 0.45;
+    const wx = R.hop ? R.hop.takeoff : clamp(tx, pl.x1 + m, pl.x2 - m);
+    const dx = wx - P.x, sp = (run ? 190 : 85) * k;
+    if (Math.abs(dx) > 8 * k) {
+      P.face = sign(dx); P.x += sign(dx) * Math.min(Math.abs(dx), sp * dt); P.legT += dt * sp / (6 * S) * Math.PI; NAV.moving = true;
+      if (run && chance(0.1)) dust(1, -P.face);
+      return 'moving';
+    }
+    if (R.hop) {
+      const B2 = R.hop.to, lx = R.hop.land, G = G0 * k, dy = B2.y - P.y, hx = 34 * k;
+      const vy0 = -Math.sqrt(2 * G * (Math.max(0, -dy) + hx));
+      const T = (-vy0 + Math.sqrt(vy0 * vy0 + 2 * G * dy)) / G;
+      let vx = (lx - P.x) / T;
+      if (B2.y > pl.y + 4) {                               // 往下跳:回到本平台高度之前,水平上必须先越过边缘,不然会落回原地
+        const side = sign(lx - (pl.x1 + pl.x2) / 2), edgeX = side > 0 ? pl.x2 : pl.x1, tRet = 2 * (-vy0) / G;
+        vx = side * Math.max(Math.abs(vx), (Math.abs(edgeX - P.x) + 8 * k) / tRet);
+      }
+      if (!(T > 0) || Math.abs(vx) > 430 * k) { NAV.bad.add(pl.key + '>' + B2.key); NAV.route = null; return 'moving'; }
+      NAV.hops++; P.face = sign(lx - P.x || P.face);
+      setMode('crouch', { vx, vy: vy0, tag: 'jump' });
+      return 'hopping';
+    }
+    if (o.leap && !NAV.leaped) {                            // 到了目标平台,鼠标还在头顶上方 → 扑上去抓它
+      const rise = (P.y - 5.5 * S) - ty;
+      if (rise > 40 * k) {
+        const h = clamp(rise + 18 * k, 70 * k, 260 * k);
+        NAV.leaped = true; P.face = sign(tx - P.x || P.face);
+        setMode('crouch', { vx: clamp((tx - P.x) * 1.2, -140 * k, 140 * k), vy: -Math.sqrt(2 * G0 * k * h), tag: 'pounce' });
+        return 'hopping';
+      }
+    }
+    return 'arrived';
+  }
+  function navPick(kind) {
+    const from = P.plat; if (!from) return null;
+    const map = bfs(from, P.x), c = [];
+    for (const [p] of map) {
+      if (p === from) continue;
+      if (kind === 'up' && !(p.y < P.y - 25 * k)) continue;
+      if (kind === 'down' && !(p.y > P.y + 25 * k)) continue;
+      if (kind === 'window' && p.kind === 'g') continue;
+      if (kind === 'ground' && p.kind !== 'g') continue;
+      c.push(p);
+    }
+    if (!c.length) return null;
+    const p = c[Math.floor(Math.random() * c.length)], m = petW * 0.6;
+    return { x: rnd(p.x1 + m, Math.max(p.x1 + m, p.x2 - m)), y: p.y - 5.5 * S };
+  }
+
   // ---------------------------------------------------------------- decisions
   function decide() {
     if (Director.onFree()) return;
@@ -1082,6 +1201,7 @@
   function startGrab(x, y) {
     const lx = (x - P.x) / S * P.face, ly = (y - P.y) / S;
     setMode('grab', { ox: x - P.x, oy: y - P.y, px: lx, py: ly });
+    Director.event('grab');
     if (hitboxEl) hitboxEl.style.cursor = 'grabbing';
     document.body.style.cursor = 'grabbing';
   }
@@ -1299,7 +1419,8 @@
       if (CALM.has(P.mode) && !Director.busy()) { say(r.text, 2800); if (r.mode === 'sit') setMode('sit', { dur: 8 }); else setMode(r.mode, r.mode === 'cheer' ? { quiet: true } : {}); }
     });
     api.onDom(list => { domList = list || []; domStamp = performance.now(); rebuild(); });
-    if (api.onStory) api.onStory(m => { if (m && m.payload) Director.play(m.payload, { premise: m.premise }); });
+    if (api.onStory) api.onStory(m => { if (m && m.payload) Director.play(m.payload, { premise: m.premise, cont: !!m.cont, truncated: !!m.truncated }); });
+    if (api.onGen) api.onGen((type, m) => { if (type === 'begin') Director.beginStream(m); else if (type === 'nodes') Director.pushNodes(m); else Director.endStream(m); });
     if (api.onThinking) api.onThinking(on => Director.thinking(on));
     if (api.onSay) api.onSay(t => say(String(t).slice(0, 80), 4200, 'force'));
     api.onCommand(c => {
@@ -1332,6 +1453,8 @@
   Director.init({
     P, cur, ball, S: () => S, k: () => k, petW: () => petW, W: () => W, now: () => now,
     setMode, say, sayStory, hideBubble, spawn, hearts, stars, confetti, dust, note, ztext, decide,
+    H: () => H, overPet, typing: () => isTyping(), navStep, navReset, navPick, navMoving: () => NAV.moving,
+    genAbort: api && api.genAbort ? () => api.genAbort() : null,
     askText: api && api.askText ? q => api.askText(q) : null,
     llmContinue: api && api.llmContinue ? st => api.llmContinue(st) : null,
     skills: () => (Life.mem && Life.mem.skills) || {},
@@ -1345,7 +1468,7 @@
 
   function start() {
     applyCosmetics();
-    if (api && api.reportPet) setInterval(() => api.reportPet({ x: P.x, y: P.y, ctx: Life.summary() }), 1500);
+    if (api && api.reportPet) setInterval(() => api.reportPet({ x: P.x, y: P.y, ctx: Life.summary() + ';屏幕上有' + Math.max(0, plats.length - 1) + '个可踩的窗口/元素' }), 1500);
     P.greetText = Life.greeting();
     summon();
     if (P.shiny) setTimeout(() => say('✨ 闪光 Clawd 出现了!', 3600, 'force'), 6500);
