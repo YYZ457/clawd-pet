@@ -106,7 +106,7 @@
     }
   }
 
-  function setExtraPlats(list) { extraPlats = (list || []).slice(0, 8); rebuild(); }
+  function setExtraPlats(list) { extraPlats = (list || []).slice(0, 24); rebuild(); }
   function platBelow(px, y) { let best = plats[0]; for (const p of plats) if (px >= p.x1 && px <= p.x2 && p.y >= y - 2 && (!best || p.y < best.y || best.y < y - 2)) best = p; return best; }
   function findLanding(px, y0, y1) {
     let best = null;

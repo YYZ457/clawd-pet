@@ -114,7 +114,14 @@
   def('ghost', ['...WWW...', '..WWWWW..', '.WWWWWWW.', '.WKWWKWW.', '.WKWWKWW.', '.WWWWWWW.', 'WWWMMWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'W.WW.WW.W'], 'c');
   def('chick', ['..YYY..', '.YYKYY.', '.YYYYOO', 'YYYYYY.', 'YYYYYY.', '.YYYY..', '..O.O..']);
 
-  const names = Object.keys(lib);
+  // ---------------- 打开后的样子(use how:"open" 会自动换成 xxx_o)
+  def('chest_o', ['.NNNNNNNNNN.', 'NnnnnnnnnnnN', 'N.Y.YW.Y.Y.N', 'NYWYYYYYWYYN', 'nnnnnYYnnnnn', 'NNNNNYYNNNNN', 'NNNNNNNNNNNN', 'NNNNNNNNNNNN', 'nnnnnnnnnnnn']);
+  def('gift_o', ['RRRRY......', 'rrrrY......', '...........', '.Y.......Y.', '.RRRRYRRRR.', '.RRRRYRRRR.', '.YYYYYYYYY.', '.RRRRYRRRR.', '.rrrrYrrrr.']);
+  def('door_o', ['..NNNN..', '.NKKKKN.', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'NKKKKKKN', 'nnnnnnnn']);
+  def('box_o', ['N......N', '.N....N.', 'NNNNNNNN', 'NnnNNnnN', 'NnNnnNnN', 'NNnNNnNN', 'NnNnnNnN', 'NnnNNnnN', 'NNNNNNNN']);
+  def('egg', ['..WWW..', '.WWWWW.', 'WWWWWWW', 'WWwWWWW', 'WWWWWWw', '.WWWWw.', '..www..'], 'c');
+
+  const names = Object.keys(lib).filter(n => !/_o$/.test(n));
 
   // ---------------- 规范化 / 绘制
   const norm = new WeakMap();

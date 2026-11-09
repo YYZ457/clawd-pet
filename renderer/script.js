@@ -11,7 +11,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const MAX_NODES = 160;
   const ACTS = ['wave', 'dance', 'cheer', 'spin', 'flip', 'stretch', 'bow', 'hiccup', 'sneeze', 'moonwalk', 'sit', 'read', 'coffee', 'cookie', 'laptop', 'hop', 'love', 'trip', 'doze', 'startle', 'critter', 'party', 'ball', 'pounce', 'poke', 'ouch', 'notice'];
-  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall', 'motion', 'shape'];
+  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall', 'motion', 'shape', 'use'];
   const ENUM = {
     eye: ['open', 'happy', 'closed', 'wide', 'angry', 'sad', 'x', 'heart', 'dots', '><'],
     mouth: ['smile', 'o', 'big', 'yawn', 'frown', 'flat', 'cat', 'munch'],
@@ -33,6 +33,7 @@
   const FACES = ['auto', 'left', 'right', 'keep'];
   const TRAILS = ['dust', 'smoke', 'fire', 'star', 'sparkle', 'heart', 'note', 'bubbles', 'snow', 'speed'];
   const SHAPES = ['line', 'rect', 'circle', 'arc'];
+  const USES = ['pick', 'kick', 'push', 'hit', 'eat', 'hug', 'poke', 'open', 'throw', 'sit', 'stand', 'hide', 'ride', 'look'];
   const ANCHORS = ['pet', 'hand', 'handL', 'hands', 'head', 'feet'];
   const COLORS = { red: '#e04b4b', orange: '#f2994a', yellow: '#f6c945', green: '#4caf50', blue: '#4f8fe0', sky: '#8fd3ff', water: '#3d9be9', purple: '#b06fd6', pink: '#ff8fb8', brown: '#8b5a3c', wood: '#a8733f', gray: '#9aa3ad', grey: '#9aa3ad', white: '#ffffff', black: '#2b211c', gold: '#f6c945', rope: '#c9a46a', grass: '#5fbf5f', snow: '#f4f8ff', ice: '#bfe9ff', silver: '#c9d1d9', cream: '#f7e6c4', skin: '#f2c9a0', dark: '#3a2a22', navy: '#2f3f7a', cyan: '#6cc3ff', lime: '#9be15d', beige: '#e8d5b0', violet: '#8f5fd6', magenta: '#e05bd0', teal: '#2fa59a', olive: '#8a9a3a', maroon: '#7a2a2a', 红: '#e04b4b', 橙: '#f2994a', 黄: '#f6c945', 绿: '#4caf50', 蓝: '#4f8fe0', 紫: '#b06fd6', 粉: '#ff8fb8', 棕: '#8b5a3c', 灰: '#9aa3ad', 白: '#ffffff', 黑: '#2b211c', 金: '#f6c945' };
   const FLY_TO = ['top', 'bottom', 'ground', 'left', 'right', 'center', 'cursor', 'up', 'down', 'point'];
@@ -148,7 +149,7 @@
         if (c.to === 'plat') { c.key = key(n.key, 8); c.at = AT3.includes(n.at) ? n.at : 'center'; if (!c.key) return null; }
         if (c.to === 'point') { c.x = num(n.x, 0, 1, 0.5); c.y = num(n.y, 0.1, 0.95, 0.8); }
         break;
-      case 'face': c.dir = ['left', 'right', 'cursor'].includes(n.dir) ? n.dir : 'cursor'; break;
+      case 'face': c.dir = ['left', 'right', 'cursor', 'item'].includes(n.dir) ? n.dir : 'cursor'; if (n.key != null) c.key = key(n.key, 8); break;
       case 'fx': c.kind = FX.includes(n.kind) ? n.kind : 'star'; c.n = Math.round(num(n.n, 1, 12, 4)); c.text = str(n.text, 6); break;
       case 'item':
         if (n.remove) c.remove = n.remove === true ? true : (key(n.remove, 8) || true);
@@ -157,12 +158,13 @@
           if (art) c.art = art; else if (EMOJI.test(e)) c.emoji = e; else return null;
           if (n.px != null) c.px = Math.round(num(n.px, 8, 32, 16));
           const rc = recolorMap(n.recolor); if (rc) c.recolor = rc;
-          c.at = ATS.includes(n.at) ? n.at : 'near';
+          if (ATS.includes(n.at)) c.at = n.at;          // 不写位置 + key 已存在 = 原地换样子
           if (n.x != null) c.x = num(n.x, 0, 1, 0.5);
           if (n.y != null) c.y = num(n.y, 0.05, 0.98, 0.5);
           if (n.scale != null) c.scale = num(n.scale, 0.5, 6, 1);
           if (ANIMS.includes(n.anim) && n.anim !== 'none') c.anim = n.anim;
           if (n.layer === 'back') c.layer = 'back';
+          if (n.solid) c.solid = true;
           if (n.flip) c.flip = true;
           const k = key(n.key, 8); if (k) c.key = k;
         }
@@ -286,6 +288,17 @@
         if (n.async) c.async = true;
         break;
       }
+      case 'use': {
+        c.how = USES.includes(n.how) ? n.how : 'poke';
+        if (n.key != null && key(n.key, 8)) c.key = key(n.key, 8);
+        if (n.to != null) { const t = n.to === 'cursor' ? 'cursor' : point(n.to); if (t) c.to = t; }
+        if (n.power != null) c.power = num(n.power, 0, 1, 0.6);
+        if (n.dx != null) c.dx = num(n.dx, -20, 20, 3);
+        if (TAKE_AT.includes(n.at)) c.at = n.at;
+        if (n.sink != null) c.sink = num(n.sink, 0, 1, 0.5);
+        if (n.line) c.line = true;
+        break;
+      }
       case 'shape': {
         if (n.remove) { c.remove = n.remove === true ? true : (key(n.remove, 8) || true); break; }
         c.key = key(n.key, 8) || 'sh';
@@ -364,5 +377,5 @@
     return false;
   }
 
-  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES, PLAT_STYLES, ANIMS, TAKES, FLY_TO, FLY_STYLE, FLY_THEN, JUMP_TO, TAKE_AT, PACES, THENS, TRAILS, SHAPES, ANCHORS, color, point };
+  return { sanitize, sanitizeNode, finalize, pose, fmt, applySet, compare, ACTS, TYPES, ENUM, NUM, FX, WAITS, MOVES, TINTS, MAX_NODES, PLAT_STYLES, ANIMS, TAKES, FLY_TO, FLY_STYLE, FLY_THEN, JUMP_TO, TAKE_AT, PACES, THENS, TRAILS, SHAPES, ANCHORS, USES, color, point };
 });

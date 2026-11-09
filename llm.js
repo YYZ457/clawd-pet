@@ -17,9 +17,9 @@ say{text≤90,ms?,pose?{姿态字段同 anim},act?动作名(边说边做)} 台�
 act{name,max?秒} 动作:wave dance cheer spin flip stretch bow hiccup sneeze moonwalk sit read coffee cookie laptop hop love trip doze startle critter party ball pounce poke ouch notice
 anim{dur≤20,keys:[{t:0~1,姿态}],hold?,loop?1~8} 自编动作(原地),关键帧之间自动平滑。姿态字段:lift(0~12 离地高度) dy sx sy(0.6~1.4挤压拉伸,sx 负数=镜像) rot(弧度,±6.28=转一圈;1.57 躺倒,3.14 倒立) size(0.3~3 整体变大变小) alpha(0~1 透明,0=隐身) ex ey(-1~1眼神) eye(open happy closed wide angry sad x heart dots ><) mouth(smile o big yawn frown flat cat munch) blush(0~1) tears dizzy armL armR([dx,dy,h],dy=-6 为举手) legs(stand walk run tuck air dangle) prop(book mug cookie flower balloon sign heart laptop) hat(santa party crown bow nightcap pumpkin redcap) glasses(shades)
 move{to:left|right|center|cursor|item|up|down|window|ground|plat|point,item?,run?} 走过去。cursor=真的去追用户的鼠标(会跳上跳下,x 和 y 都会靠近);item=走到道具;up/down/window=跳到更高/更低/随机的别的窗口上;ground=回到地面;plat(key,at:left|right|center)=走到自己造的平台上(够不着会自动大跳);point(x,y 屏幕比例)
-face{dir:left|right|cursor}
+face{dir:left|right|cursor|item,key?} 转身(item=朝向某个道具,之后眼睛会一直看着它)
 fx{kind:heart star note confetti dust zzz text question exclaim sweat anger sparkle snow rain fireworks bubbles,n:1~12,text?≤6}
-item{art:道具名(内置库 / 自己 sprite 的 name / 常见英文名如 bicycle guitar) 或 emoji:单个emoji(会自动变成像素风),px?:8~32(emoji 的像素格数,默认16,细节多的写 20~24),recolor?:{原色字母:新颜色}(给内置道具换色,如蓝气球 {"R":"blue"}),at:left|right|center|near|far|cursor|random 或 x,y(0~1 屏幕比例,可悬在半空),scale?0.5~6(默认1),anim?bob|float|spin|swing|pulse|blink|drift,layer?back,flip?,key?≤8字母} 放道具(同屏最多 10 个);{"t":"item","remove":true 或 key} 拿走
+item{art:道具名(内置库 / 自己 sprite 的 name / 常见英文名如 bicycle guitar) 或 emoji:单个emoji(会自动变成像素风),px?:8~32(emoji 的像素格数,默认16,细节多的写 20~24),recolor?:{原色字母:新颜色}(给内置道具换色,如蓝气球 {"R":"blue"}),at:left|right|center|near|far|cursor|random 或 x,y(0~1 屏幕比例,可悬在半空),scale?0.5~6(默认1),anim?bob|float|spin|swing|pulse|blink|drift,layer?back,flip?,solid?:true(顶上能站人:箱子 石头 桌子…),key?≤8字母} 放道具(同屏最多 10 个);同一个 key 再写一次 item 且不给位置 = 原地换样子(蛋→小鸡、花苞→花);{"t":"item","remove":true 或 key} 拿走
   内置像素道具库(优先用,不用自己画):${Props.names.join(' ')}
 sprite{name≤8字母, 四种画法选一种(越靠前越稳越好看):
   ①emoji:"🐲",px? 用某个 emoji 当底图,自动像素化
@@ -30,7 +30,10 @@ sprite{name≤8字母, 四种画法选一种(越靠前越稳越好看):
   ④rows:[字符画…](每行≤32 字符,一个字符一个像素,.=透明),frames?:[rows,rows…](≤4 帧动画),fps? 最容易画歪,尽量别用
   通用可选:pal?:{字母:"#rrggbb"},shade?:false(关掉自动明暗),outline?:true(描深色边,在花哨的桌面上更显眼),anchor?:b|c
   默认调色板字母:R红 r暗红 O橙 o暗橙 Y黄 y暗黄 G绿 g暗绿 B蓝 b暗蓝 P紫 p暗紫 N棕 n暗棕 S灰 s暗灰 W白 w浅灰 K黑 C青 c浅青 M粉 L米 T褐;一出戏最多 12 个 sprite,放在用到它的 item 之前
-take{key?,at:head|hand|hands|back|front|under,dx?,dy?,rot?,line?,sink?,layer?} 把道具挂到身上,会跟着姿态、翻滚一起动:hand=前手拿着 hands=双手举过头顶 head=顶在头上 back=背着 front=抱在身前 under=骑着/站在上面(扫帚 滑板 魔毯 云 船 火箭…;sink 0~1 身体陷进去多深,0=站在上面,0.5=骑着/坐在船里,1=只露出脑袋)。dx,dy=偏移(像素格,宠物约 14 格宽,dx 朝面向的方向,dy 负=往上),line:true=从手牵一根线过去(气球、风筝;dy 越负飞得越高)
+use{key,how,to?,power?,dx?,at?} 和道具互动(推荐!它会自己走到合适的位置、朝向道具、摆好姿势,道具也会有反应,不用自己算坐标):
+  how: pick捡起来(at 指定挂哪) kick踢飞(power 0~1) push推着走(dx 推几个身位,负数=往回拉) hit打一下(power 大会打飞) poke戳戳 hug抱抱 eat吃掉(道具会消失) open打开(宝箱/礼物/门/箱子会变成打开的样子) throw扔出去(to:[x,y] 或 目标道具 key 或 "cursor",砸中会有反应) sit坐上去 stand站上去 hide躲到后面 ride骑上去 look盯着看
+  道具有物理:踢飞/扔出去会画抛物线、落地弹几下、滚一段、撞墙弹回、掉出平台边缘会掉下去
+take{key?,at:head|hand|hands|back|front|under,dx?,dy?,rot?,line?,sink?,layer?} 把道具挂到身上(离得远会先走过去捡),会跟着姿态、翻滚一起动:hand=前手拿着 hands=双手举过头顶 head=顶在头上 back=背着 front=抱在身前 under=骑着/站在上面(扫帚 滑板 魔毯 云 船 火箭…;sink 0~1 身体陷进去多深,0=站在上面,0.5=骑着/坐在船里,1=只露出脑袋)。dx,dy=偏移(像素格,宠物约 14 格宽,dx 朝面向的方向,dy 负=往上),line:true=从手牵一根线过去(气球、风筝;dy 越负飞得越高)
 put 放下(在空中放手道具会掉下去)
 platform{key,x1,x2(0~1),y(0.15~0.9 屏幕高度比例),style:rope|plank|cloud|ledge|ice|beam} 在屏幕上凭空造一个能站的平台(钢丝/木板/云…,最多 6 个);{"t":"platform","remove":true 或 key} 拆掉(站在上面的会掉下来)
 fly{to:top|bottom|ground|left|right|center|cursor|up|down(或 x,y),sec,style:float|dash|bounce,then:hover|fall|land} 飞到某处的简便写法(复杂轨迹用 motion)
@@ -71,7 +74,8 @@ end{text?}
   ①场景:能站的地方(platform / shape solid)、线和面(shape)、道具(item)
   ②运动:谁、从哪到哪、走什么轨迹(motion path/orbit + pace hop sway spin tilt);真实物理用 jump / fall / then:"fall"
   ③身体:姿态和表情(motion.keys / anim / say.pose):蜷缩 legs:tuck、躺下 rot:1.57、倒立 rot:3.14、变大 size、隐身 alpha、举手 armL/armR
-  ④关系:道具挂在身上哪里(take at),绳子两端绑着谁(shape 端点),几样东西同时动(async)
+  ④关系:和道具怎么互动(use:捡 踢 推 打 吃 抱 开 扔 坐 躲 骑),挂在身上哪里(take at),绳子两端绑着谁(shape 端点),几样东西同时动(async)
+  和道具打交道优先用 use,别用 move+anim+motion 自己拼(你不知道道具在屏幕上的精确位置,拼出来会对不上)
   拆法示例(只是演示思路,别照抄):荡秋千=shape line 从[0.5,0.08]到"hands" + motion orbit{x:0.5,y:0.08,r:7,a:[-45,45,-40,40,0]} then:"stay";骑扫帚=item broom + take at:"under" sink:0.5 + motion path 多个点 tilt:0.4 trail:"sparkle";滑滑梯=shape line w:3 斜放 + motion 沿着线 pace:"in" tilt:1 then:"fall";游泳=shape rect wave color:water layer:"front" alpha:0.7 + motion sway + keys 交替划手。
 - 连续在空中做几件事(中间插台词)时,前一个 motion 写 then:"stay";做完记得 then:"land" 或 fall 回到地面。
 - 只输出上面定义的字段。
