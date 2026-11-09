@@ -11,7 +11,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const MAX_NODES = 160;
   const ACTS = ['wave', 'dance', 'cheer', 'spin', 'flip', 'stretch', 'bow', 'hiccup', 'sneeze', 'moonwalk', 'sit', 'read', 'coffee', 'cookie', 'laptop', 'hop', 'love', 'trip', 'doze', 'startle', 'critter', 'party', 'ball', 'pounce', 'poke', 'ouch', 'notice'];
-  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall', 'motion', 'shape', 'use'];
+  const TYPES = ['say', 'act', 'anim', 'move', 'face', 'fx', 'item', 'take', 'put', 'wear', 'tint', 'wait', 'ask', 'wait_for', 'ask_text', 'set', 'if', 'random', 'loop', 'continue', 'end', 'sprite', 'platform', 'fly', 'jump', 'fall', 'motion', 'shape', 'use', 'follow'];
   const ENUM = {
     eye: ['open', 'happy', 'closed', 'wide', 'angry', 'sad', 'x', 'heart', 'dots', '><'],
     mouth: ['smile', 'o', 'big', 'yawn', 'frown', 'flat', 'cat', 'munch'],
@@ -33,6 +33,12 @@
   const FACES = ['auto', 'left', 'right', 'keep'];
   const TRAILS = ['dust', 'smoke', 'fire', 'star', 'sparkle', 'heart', 'note', 'bubbles', 'snow', 'speed'];
   const SHAPES = ['line', 'rect', 'circle', 'arc'];
+  const PET_WORDS = ['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角'];
+  const TO_WORDS = ['pet', 'cursor', 'mouse', 'top', 'sky', 'ground', 'bottom', 'left', 'right', 'center', 'up', 'down', 'away', 'offscreen'];
+  /** 模型常用别的字段名来指"哪个道具/谁":who / key / item / target / obj */
+  const refOf = (...vs) => { for (const v of vs) { if (v == null || typeof v === 'object') continue; const t = String(v).trim().toLowerCase(); if (PET_WORDS.includes(t)) return 'pet'; const k = key(v, 12); if (k) return k; } return ''; };
+  /** 一个点或一串点:[x,y] / [[x,y],…] / {x,y} / [{x,y},…] */
+  const ptsOf = v => { if (!Array.isArray(v) && !(v && typeof v === 'object')) return null; if (!Array.isArray(v)) return [v]; if (v.length === 2 && typeof v[0] !== 'object') return [v]; return v; };
   const USES = ['pick', 'kick', 'push', 'hit', 'eat', 'hug', 'poke', 'open', 'throw', 'sit', 'stand', 'hide', 'ride', 'look'];
   const ANCHORS = ['pet', 'hand', 'handL', 'hands', 'head', 'feet'];
   const COLORS = { red: '#e04b4b', orange: '#f2994a', yellow: '#f6c945', green: '#4caf50', blue: '#4f8fe0', sky: '#8fd3ff', water: '#3d9be9', purple: '#b06fd6', pink: '#ff8fb8', brown: '#8b5a3c', wood: '#a8733f', gray: '#9aa3ad', grey: '#9aa3ad', white: '#ffffff', black: '#2b211c', gold: '#f6c945', rope: '#c9a46a', grass: '#5fbf5f', snow: '#f4f8ff', ice: '#bfe9ff', silver: '#c9d1d9', cream: '#f7e6c4', skin: '#f2c9a0', dark: '#3a2a22', navy: '#2f3f7a', cyan: '#6cc3ff', lime: '#9be15d', beige: '#e8d5b0', violet: '#8f5fd6', magenta: '#e05bd0', teal: '#2fa59a', olive: '#8a9a3a', maroon: '#7a2a2a', 红: '#e04b4b', 橙: '#f2994a', 黄: '#f6c945', 绿: '#4caf50', 蓝: '#4f8fe0', 紫: '#b06fd6', 粉: '#ff8fb8', 棕: '#8b5a3c', 灰: '#9aa3ad', 白: '#ffffff', 黑: '#2b211c', 金: '#f6c945' };
@@ -149,7 +155,7 @@
         if (c.to === 'plat') { c.key = key(n.key, 8); c.at = AT3.includes(n.at) ? n.at : 'center'; if (!c.key) return null; }
         if (c.to === 'point') { c.x = num(n.x, 0, 1, 0.5); c.y = num(n.y, 0.1, 0.95, 0.8); }
         break;
-      case 'face': c.dir = ['left', 'right', 'cursor', 'item'].includes(n.dir) ? n.dir : 'cursor'; if (n.key != null) c.key = key(n.key, 8); break;
+      case 'face': c.dir = ['left', 'right', 'cursor', 'item'].includes(n.dir) ? n.dir : (refOf(n.key, n.item, n.target) ? 'item' : 'cursor'); { const r = refOf(n.key, n.item, n.target); if (r) c.key = r; } break;
       case 'fx': c.kind = FX.includes(n.kind) ? n.kind : 'star'; c.n = Math.round(num(n.n, 1, 12, 4)); c.text = str(n.text, 6); break;
       case 'item':
         if (n.remove) c.remove = n.remove === true ? true : (key(n.remove, 8) || true);
@@ -159,8 +165,10 @@
           if (n.px != null) c.px = Math.round(num(n.px, 8, 32, 16));
           const rc = recolorMap(n.recolor); if (rc) c.recolor = rc;
           if (ATS.includes(n.at)) c.at = n.at;          // 不写位置 + key 已存在 = 原地换样子
-          if (n.x != null) c.x = num(n.x, 0, 1, 0.5);
-          if (n.y != null) c.y = num(n.y, 0.05, 0.98, 0.5);
+          if ((Number(n.x) > 1.5 || Number(n.y) > 1.5)) c.pix = true;                       // 像素坐标
+          if (n.x != null) c.x = c.pix ? num(n.x, 0, 8000, 500) : num(n.x, 0, 1, 0.5);
+          if (n.y != null) c.y = c.pix ? num(n.y, 0, 8000, 500) : num(n.y, 0.05, 0.98, 0.5);
+          { const f = refOf(n.follow); if (f) c.follow = f === 'mouse' ? 'cursor' : f; }
           if (n.scale != null) c.scale = num(n.scale, 0.5, 6, 1);
           if (ANIMS.includes(n.anim) && n.anim !== 'none') c.anim = n.anim;
           if (n.layer === 'back') c.layer = 'back';
@@ -170,7 +178,7 @@
         }
         break;
       case 'take': {
-        if (n.key != null) c.key = key(n.key, 8);
+        { const r = refOf(n.key, n.item, n.who, n.target, n.obj); if (r && r !== 'pet') c.key = r; }
         // 旧写法 how:head|hold|balloon|back → 新写法 at:挂点
         const how = TAKES.includes(n.how) ? n.how : '';
         c.at = TAKE_AT.includes(n.at) ? n.at : how === 'hold' ? 'hand' : how === 'balloon' ? 'hands' : how || 'head';
@@ -260,12 +268,23 @@
         break;
       case 'fall': break;
       case 'motion': {
-        c.who = key(n.who, 8) || 'pet';
-        c.sec = num(n.sec, 0.3, 20, 2);
+        c.who = refOf(n.who, n.item, n.target, n.obj, n.key) || 'pet';
+        let sec = n.sec != null ? n.sec : n.duration != null ? n.duration : n.dur != null ? n.dur : n.time; sec = Number(sec); if (sec > 60) sec /= 1000;   // 写成毫秒的也认
+        c.sec = num(sec, 0.3, 20, 2);
+        // 路线的各种写法:path / points / to:[x,y] / x,y / dx,dy(相对)
+        let raw = ptsOf(n.path) || ptsOf(n.points) || ptsOf(n.waypoints) || (Array.isArray(n.to) || (n.to && typeof n.to === 'object') ? ptsOf(n.to) : null);
         c.rel = !!n.rel;
-        if (Array.isArray(n.path)) {
-          const pts = n.path.slice(0, 16).map(p => (c.rel ? pair(p, -40, 40) : pair(p, -0.1, 1.1, 0.02, 1))).filter(Boolean);
-          if (pts.length) c.path = pts;
+        if (!raw && (n.x != null || n.y != null)) raw = [[n.x != null ? n.x : null, n.y != null ? n.y : null]];
+        if (!raw && (n.dx != null || n.dy != null)) { raw = [[Number(n.dx) || 0, Number(n.dy) || 0]]; c.rel = true; }
+        if (typeof n.to === 'string') { const t = n.to.trim().toLowerCase(); c.toRef = TO_WORDS.includes(t) ? t : (PET_WORDS.includes(t) ? 'pet' : key(n.to, 12)); }
+        if (raw) {
+          const nums = raw.flatMap(p => (Array.isArray(p) ? p : p && typeof p === 'object' ? [p.x != null ? p.x : p.dx, p.y != null ? p.y : p.dy] : [])).map(Number).filter(Number.isFinite);
+          if (!c.rel && nums.some(v => Math.abs(v) > 1.5)) c.pix = true;                   // 看起来是像素坐标 → 交给导演按屏幕尺寸换算
+          const pts = raw.slice(0, 16).map(p => {
+            if (Array.isArray(p) && (p[0] == null || p[1] == null) && (p[0] != null || p[1] != null)) return [p[0] == null ? NaN : Number(p[0]), p[1] == null ? NaN : Number(p[1])];   // 只给了 x 或只给了 y
+            return c.rel ? pair(p, -40, 40) : c.pix ? pair(p, -500, 8000) : pair(p, -0.1, 1.1, -0.3, 1);
+          }).filter(p => p && (Number.isFinite(p[0]) || Number.isFinite(p[1])));
+          if (pts.length) c.path = pts.map(p => p.map(v => (Number.isFinite(v) ? v : null)));
         }
         if (n.orbit && typeof n.orbit === 'object') {
           const o = n.orbit, ob = { r: num(o.r, 0.3, 40, 4) };
@@ -288,9 +307,17 @@
         if (n.async) c.async = true;
         break;
       }
+      case 'follow': {
+        c.who = refOf(n.who, n.item, n.key, n.obj) || '';
+        if (n.stop || n.to === 'none' || n.to === false) { c.stop = true; break; }
+        const to = refOf(n.to, n.target, n.leader) || 'pet'; c.to = to === 'mouse' ? 'cursor' : to;
+        c.gap = num(n.gap, 0, 10, 1.3); c.side = ['behind', 'front', 'any'].includes(n.side) ? n.side : 'any';
+        if (n.fly) c.fly = true; if (n.speed != null) c.speed = num(n.speed, 0.2, 3, 1);
+        break;
+      }
       case 'use': {
         c.how = USES.includes(n.how) ? n.how : 'poke';
-        if (n.key != null && key(n.key, 8)) c.key = key(n.key, 8);
+        { const r = refOf(n.key, n.item, n.who, n.target, n.obj); if (r && r !== 'pet') c.key = r; }
         if (n.to != null) { const t = n.to === 'cursor' ? 'cursor' : point(n.to); if (t) c.to = t; }
         if (n.power != null) c.power = num(n.power, 0, 1, 0.6);
         if (n.dx != null) c.dx = num(n.dx, -20, 20, 3);

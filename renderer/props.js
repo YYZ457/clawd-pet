@@ -349,5 +349,15 @@
     return em ? fromEmoji(em, grid) : null;
   }
 
-  return { DEF, lib, names, get, draw, size, normalize, fromGrid, fromShapes, fromRows, fromEmoji, recolor, byName, colOf, ALIAS };
+  /** 一张图转起来像不像"本来就该转的东西":轮廓转 90° / 180° 后和自己重合得越多越像(球、轮子、硬币、星星 ≈ 1;房子、树、带底座的摩天轮 < 0.75) */
+  const roundCache = new WeakMap();
+  function roundness(spr) {
+    if (!spr) return 0; if (roundCache.has(spr)) return roundCache.get(spr);
+    const n = normalize(spr), N = Math.max(n.w, n.h), ox = (N - n.w) / 2, oy = (N - n.h) / 2;
+    const on = (x, y) => { const sx = Math.round(x - ox), sy = Math.round(y - oy); return sx >= 0 && sy >= 0 && sx < n.w && sy < n.h && n.rows[sy][sx] !== '.'; };
+    const iou = f => { let a = 0, u = 0; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const p = on(x, y), [rx, ry] = f(x, y), q = on(rx, ry); if (p && q) a++; if (p || q) u++; } return u ? a / u : 0; };
+    const r = Math.min(iou((x, y) => [N - 1 - x, N - 1 - y]), (iou((x, y) => [y, N - 1 - x]) + iou((x, y) => [N - 1 - y, x])) / 2);
+    roundCache.set(spr, r); return r;
+  }
+  return { roundness, DEF, lib, names, get, draw, size, normalize, fromGrid, fromShapes, fromRows, fromEmoji, recolor, byName, colOf, ALIAS };
 });

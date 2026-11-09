@@ -31,21 +31,24 @@ sprite{name≤8字母, 四种画法选一种(越靠前越稳越好看):
   通用可选:pal?:{字母:"#rrggbb"},shade?:false(关掉自动明暗),outline?:true(描深色边,在花哨的桌面上更显眼),anchor?:b|c
   默认调色板字母:R红 r暗红 O橙 o暗橙 Y黄 y暗黄 G绿 g暗绿 B蓝 b暗蓝 P紫 p暗紫 N棕 n暗棕 S灰 s暗灰 W白 w浅灰 K黑 C青 c浅青 M粉 L米 T褐;一出戏最多 12 个 sprite,放在用到它的 item 之前
 use{key,how,to?,power?,dx?,at?} 和道具互动(推荐!它会自己走到合适的位置、朝向道具、摆好姿势,道具也会有反应,不用自己算坐标):
-  how: pick捡起来(at 指定挂哪) kick踢飞(power 0~1) push推着走(dx 推几个身位,负数=往回拉) hit打一下(power 大会打飞) poke戳戳 hug抱抱 eat吃掉(道具会消失) open打开(宝箱/礼物/门/箱子会变成打开的样子) throw扔出去(to:[x,y] 或 目标道具 key 或 "cursor",砸中会有反应) sit坐上去 stand站上去 hide躲到后面 ride骑上去 look盯着看
+  how: pick捡起来(at 指定挂哪) kick踢飞(power 0~1) push推着走(dx 推几个身位,负数=往回拉) hit打一下(power 大会打飞) poke戳戳 hug抱抱 eat吃掉(道具会消失) open打开(宝箱/礼物/门/箱子会变成打开的样子) throw扔出去(to:[x,y] 或 目标道具 key 或 "cursor",砸中会有反应) sit坐上去 stand站上去 hide躲到后面 ride骑上去(小道具如扫帚滑板会垫到脚下跟着宠物走;大道具如船 龙 火车 摩天轮,宠物会爬到它上面,之后让这个道具 motion / 转动,宠物就跟着坐在上面一起动、一起绕圈,而且保持直立) look盯着看
   道具有物理:踢飞/扔出去会画抛物线、落地弹几下、滚一段、撞墙弹回、掉出平台边缘会掉下去
 take{key?,at:head|hand|hands|back|front|under,dx?,dy?,rot?,line?,sink?,layer?} 把道具挂到身上(离得远会先走过去捡),会跟着姿态、翻滚一起动:hand=前手拿着 hands=双手举过头顶 head=顶在头上 back=背着 front=抱在身前 under=骑着/站在上面(扫帚 滑板 魔毯 云 船 火箭…;sink 0~1 身体陷进去多深,0=站在上面,0.5=骑着/坐在船里,1=只露出脑袋)。dx,dy=偏移(像素格,宠物约 14 格宽,dx 朝面向的方向,dy 负=往上),line:true=从手牵一根线过去(气球、风筝;dy 越负飞得越高)
 put 放下(在空中放手道具会掉下去)
 platform{key,x1,x2(0~1),y(0.15~0.9 屏幕高度比例),style:rope|plank|cloud|ledge|ice|beam} 在屏幕上凭空造一个能站的平台(钢丝/木板/云…,最多 6 个);{"t":"platform","remove":true 或 key} 拆掉(站在上面的会掉下来)
 fly{to:top|bottom|ground|left|right|center|cursor|up|down(或 x,y),sec,style:float|dash|bounce,then:hover|fall|land} 飞到某处的简便写法(复杂轨迹用 motion)
 jump{h:0~1(起跳高度占屏幕高度,1=顶到屏幕顶),dx:-1~1,to?:plat(key,at)|cursor|left|right,spin?:true 翻滚着飞出去还会弹几下} 真实物理的跳/被弹飞,落地才继续
-motion{who?:"pet"或道具key,sec:0.3~20,path?:[[x,y],…],rel?,orbit?,pace?,hop?,sway?,spin?,tilt?,grow?,keys?,trail?,face?,then?,async?} 万能运动:让宠物或任何道具沿路线动
+motion{who?:"pet"或道具key,sec:0.3~20,path?:[[x,y],…],to?,rel?,orbit?,pace?,hop?,sway?,spin?,tilt?,grow?,keys?,trail?,face?,then?,async?} 万能运动:让宠物或任何道具沿路线动
   path=途经点(指宠物脚底;举起的手比脚高约 1.3 个身高,吊在绳上要往下让出这段),默认屏幕比例(0~1,y 越大越靠下);rel:true 时改为相对起点的偏移,单位=宠物身高([3,-2]=往右 3 个身位、往上 2 个)
   orbit{x,y 圆心(屏幕比例;或 dx,dy 相对),r 半径(身高),a:[依次经过的角度]} 0=圆心正下方 90=右 180=正上方 270=左:[-50,50,-40,40]=来回荡,[0,360]=转一整圈,[270,180,90]=从左边越过顶上到右边
   pace:smooth 慢起慢停|linear 匀速|in 越来越快(下落、冲刺)|out 越来越慢|each 每段都慢进慢出(荡、一跳一跳、一级一级爬)
   hop=每段路上弹起几个身高;sway{x,y,f}=叠加摇摆(幅度单位身高,f 每秒几次);spin=转几圈(负=反向);tilt 0~1=身体顺着运动方向倾斜;grow=结束时变成几倍大
   keys=途中的姿态关键帧(同 anim,t 0~1);trail=拖尾 dust smoke fire star sparkle heart note bubbles snow speed;face:auto|left|right|keep
   then:stay 停在原处(空中也行)|land 缓缓落到下面能站的地方|fall 带着惯性松手掉下去|back 回到起点。缺省:宠物下一个节点还是运动就 stay,否则 land;道具缺省 stay
+  to=终点的简写:[x,y] 或 pet cursor top ground left right center up down away(飞出屏幕)或某个道具 key(飞到它那里)
   async:true=不等它做完就继续下一个节点,用来让好几样东西同时动
+  宠物骑着/举着的道具被 motion → 宠物跟着一起动;宠物骑在大道具上时 motion 宠物 → 那个大道具载着它动
+follow{who:道具key,to?:pet|cursor|道具key(默认 pet),gap?:隔几个身位(默认1.3),side?:behind|front|any,fly?:true(在空中跟),stop?:true(不跟了)} 让道具一直跟着走,直到 stop 或剧终:遛狗、小鸡跟着妈妈、被幽灵追、宠物带着跟班;牵绳就再加一根 shape line 从 "hand" 连到它
 shape{key,kind:line|rect|circle|arc,from,to?,color?,w?,r?,sag?,alpha?,fill?,wave?,solid?,dash?,layer?,colors?} 画几何图形:绳子 钢索 滑梯 鱼线 水面 洞 彩虹 光束…(最多 12 个)
   from/to=[x,y] 屏幕比例,或绑定点 "pet"(身体中心) "hand"(前手) "handL" "hands" "head" "feet",或道具 key(可加 .top .bottom .left .right .tip);绑定的端点会一直跟着动
   line:从 from 到 to,w=粗细(像素格),sag=下垂(身高);rect:from 左上 to 右下,wave:true 顶边是波浪,solid:true 顶边能站;circle:from 圆心 r 半径(身高);arc:from 为圆心朝上的半圆拱,colors 多色条(彩虹)
@@ -76,6 +79,8 @@ end{text?}
   ③身体:姿态和表情(motion.keys / anim / say.pose):蜷缩 legs:tuck、躺下 rot:1.57、倒立 rot:3.14、变大 size、隐身 alpha、举手 armL/armR
   ④关系:和道具怎么互动(use:捡 踢 推 打 吃 抱 开 扔 坐 躲 骑),挂在身上哪里(take at),绳子两端绑着谁(shape 端点),几样东西同时动(async)
   和道具打交道优先用 use,别用 move+anim+motion 自己拼(你不知道道具在屏幕上的精确位置,拼出来会对不上)
+  道具不会自己动:要它动就写 motion(移动/转圈)、follow(一直跟着)、use(踢 扔 推)、或再写一次同 key 的 item 给新位置(它会走/飘过去)。光在台词里说"火箭起飞了"画面上是不会动的
+  spin 和 anim:"spin" 会把整张图一起转,只适合本身就该整体转的东西(轮子 硬币 风车叶 星星 被踢飞的东西);有底座、分上下的东西(房子 树 摩天轮 动物)整体转会很怪,要表现"在转",就让骑在它上面的宠物 / 别的小道具绕着它 motion orbit
   拆法示例(只是演示思路,别照抄):荡秋千=shape line 从[0.5,0.08]到"hands" + motion orbit{x:0.5,y:0.08,r:7,a:[-45,45,-40,40,0]} then:"stay";骑扫帚=item broom + take at:"under" sink:0.5 + motion path 多个点 tilt:0.4 trail:"sparkle";滑滑梯=shape line w:3 斜放 + motion 沿着线 pace:"in" tilt:1 then:"fall";游泳=shape rect wave color:water layer:"front" alpha:0.7 + motion sway + keys 交替划手。
 - 连续在空中做几件事(中间插台词)时,前一个 motion 写 then:"stay";做完记得 then:"land" 或 fall 回到地面。
 - 只输出上面定义的字段。

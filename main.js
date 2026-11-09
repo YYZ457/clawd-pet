@@ -287,18 +287,38 @@ function checkLLM() {
   const u = usage();
   if (u.calls >= c.dailyCalls || u.tokens >= c.dailyTokens) throw new llm.LLMError('今天的额度用完啦(设置里可以调整)', 'budget');
 }
+// ------------------------------------------------------------ 剧本日志:模型原文 + 被丢掉的节点 + 演出时的警告(只存在本机,排查"为什么没动起来"用)
+const logDir = () => path.join(app.getPath('userData'), 'story-logs');
+let curLog = null, logTimer = null;
+function newLog(messages) {
+  const user = messages[messages.length - 1] && messages[messages.length - 1].content;
+  curLog = { time: new Date().toISOString(), model: settings.llm.model, ask: String(user || '').slice(0, 1200), raw: '', dropped: [], warnings: [], file: path.join(logDir(), new Date().toISOString().replace(/[:.]/g, '-') + '.json') };
+  return curLog;
+}
+function flushLog(lg) {
+  lg = lg || curLog; if (!lg) return;
+  try {
+    fs.mkdirSync(logDir(), { recursive: true });
+    const { file, ...data } = lg; fs.writeFileSync(file, JSON.stringify(data, null, 1));
+    const all = fs.readdirSync(logDir()).filter(f => f.endsWith('.json')).sort();
+    for (const f of all.slice(0, Math.max(0, all.length - 20))) fs.unlinkSync(path.join(logDir(), f));   // 只留最近 20 份
+  } catch (_) {}
+}
+ipcMain.on('story:warn', (_e, m) => { if (!curLog) return; if (curLog.warnings.length < 60) curLog.warnings.push(String(m).slice(0, 300)); clearTimeout(logTimer); logTimer = setTimeout(() => flushLog(), 800); });
+
 function startGen(messages, o = {}) {
   checkLLM(); abortGen();
   const c = settings.llm, id = ++genSeq, ctl = new AbortController(); gen = { id, ctl };
-  const ns = new llm.NodeStream(), ids = new Set();
+  const ns = new llm.NodeStream(), ids = new Set(), lg = newLog(messages);
   let idx = 0, began = false, settled = false, sent = 0;
   return new Promise(resolve => {
     const settle = r => { if (!settled) { settled = true; resolve(r); } };
     const onDelta = t => {
+      if (lg.raw.length < 120000) lg.raw += t;
       let raws; try { raws = ns.feed(t); } catch (_) { return; }
       if (!raws.length || (ns.kind && ns.kind !== 'story')) return;
       const clean = [];
-      for (const r of raws) { if (sent + clean.length >= ScriptTools.MAX_NODES) break; const n = ScriptTools.sanitizeNode(r, idx++, ids); if (n) clean.push(n); }
+      for (const r of raws) { if (sent + clean.length >= ScriptTools.MAX_NODES) break; const n = ScriptTools.sanitizeNode(r, idx++, ids); if (n) clean.push(n); else if (lg.dropped.length < 60) lg.dropped.push(JSON.stringify(r).slice(0, 300)); }
       if (!clean.length) return;
       if (!began) { began = true; toOverlay('gen:begin', { id, cont: !!o.cont, title: String(ns.title || '').replace(/[\u0000-\u001f<>]/g, '').slice(0, 16), premise: String(o.premise || '').slice(0, 80) }); settle({ ok: true, kind: 'story', streaming: true }); }
       sent += clean.length; toOverlay('gen:nodes', { id, nodes: clean });
@@ -306,6 +326,7 @@ function startGen(messages, o = {}) {
     llm.chatStream({ baseUrl: c.baseUrl, model: c.model, key: getKey() }, messages, { maxTokens: c.maxTokens }, onDelta)
       .then(r => {
         addUsage(r.tokens); if (gen && gen.id === id) gen = null;
+        if (!lg.raw) lg.raw = String(r.text || '').slice(0, 120000); lg.finish = r.finish; flushLog(lg);
         if (began) { toOverlay('gen:end', { id, ok: true, finish: r.finish }); return; }
         try {
           const obj = llm.extractJSON(r.text), chk = ScriptTools.sanitize(obj);
@@ -316,6 +337,7 @@ function startGen(messages, o = {}) {
       })
       .catch(e => {
         addUsage(Math.ceil((JSON.stringify(messages).length + ns.buf.length) / 1.5)); if (gen && gen.id === id) gen = null;
+        lg.error = errMsg(e); flushLog(lg);
         if (began) toOverlay('gen:end', { id, ok: false, error: errMsg(e) });
         settle({ ok: false, error: errMsg(e) });
       });
@@ -501,6 +523,7 @@ function buildMenu() {
     { label: '🎭 内置剧场', submenu: Stories.list.map(s => ({ label: s.title + ' — ' + s.desc, click: () => { const sc = Stories.get(s.id); if (sc) toOverlay('story', { payload: sc, premise: '内置:' + s.id }); } })) },
     { label: '⏹ 结束当前剧情', click: () => send('stopStory') },
     { label: '🔑 大模型设置(DeepSeek)…', click: () => openSettings() },
+    { label: '📄 剧本日志(排查用)…', click: () => { try { fs.mkdirSync(logDir(), { recursive: true }); } catch (_) {} shell.openPath(logDir()); } },
     { type: 'separator' },
     { label: '大小', submenu: sizes.map(([n, v]) => ({ label: n, type: 'radio', checked: settings.scale === v, click: () => { settings.scale = v; saveSettings(); if (win) win.webContents.send('info', info()); } })) },
     { label: '💬 显示气泡文字', type: 'checkbox', checked: !settings.quiet, click: m => { settings.quiet = !m.checked; saveSettings(); if (win) win.webContents.send('info', info()); } },

@@ -1486,6 +1486,7 @@
     groundY: () => groundY, petH: () => petH, u: () => u, startFall, attachTo: pl => { attach(pl); }, platBelow, setExtraPlats, bigJump,
     findPlat: key => plats.find(q => q.key === key) || null, plats: () => plats,
     genAbort: api && api.genAbort ? () => api.genAbort() : null,
+    storyWarn: api && api.storyWarn ? m => api.storyWarn(m) : null,
     askText: api && api.askText ? q => api.askText(q) : null,
     llmContinue: api && api.llmContinue ? st => api.llmContinue(st) : null,
     skills: () => (Life.mem && Life.mem.skills) || {},

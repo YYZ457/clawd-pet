@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('clawd', {
   reportPet: o => ipcRenderer.send('pet:report', o),
   askText: q => ipcRenderer.invoke('ask-text', q),
   llmContinue: st => ipcRenderer.invoke('story:continue', st),
+  storyWarn: m => ipcRenderer.send('story:warn', String(m).slice(0, 300)),
   // 聊天窗口 / 设置窗口使用
   chatStatus: () => ipcRenderer.invoke('chat:status'),
   chatAsk: t => ipcRenderer.invoke('chat:ask', t),

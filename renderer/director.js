@@ -15,7 +15,7 @@
   let holdPose = null, animState = null, items = [], think = null, chipsEl = null, tintEl = null;
   let stream = null, steps = 0, loops = {}, wear = null, savedLook = null, carry = null, itemSeq = 0;
   let sprites = {}, platforms = {}, hov = null, flyS = null;
-  let shapes = {}, movers = [], lastPose = null, petSize = 1, focus = null;
+  let shapes = {}, movers = [], lastPose = null, petSize = 1, focus = null, followers = {}, mount = null;
   const MAX_STEPS = 1500, MAX_SEG = 8;
   const INTERRUPT = new Set(['air', 'grab', 'petted', 'poke', 'ouch', 'tickle', 'dizzy', 'hold', 'startle', 'land', 'crouch', 'love', 'trip']);
   const DEF = { lift: 0, dy: 0, sx: 1, sy: 1, rot: 0, ex: 0, ey: 0, blush: 0, blink: 0, armL: [0, 0, 3], armR: [0, 0, 3], size: 1, alpha: 1 };
@@ -36,7 +36,7 @@
   D.busy = () => active || !!think;
   D.state = () => ({
     active, node: node && node.id, type: node && node.t, vars, title: meta.title, seg: meta.seg, log: meta.log, items: items.map(i => i.key), think: !!think,
-    n: nodes.length, streaming: !!(stream && stream.open), carry: carry && carry.key, steps, platforms: Object.keys(platforms), sprites: Object.keys(sprites), shapes: Object.keys(shapes), movers: movers.length + (node && node.t === 'motion' && st.mv && !st.mv.done ? 1 : 0), size: +curSize().toFixed(2), pos: A ? [Math.round(A.P.x), Math.round(A.P.y)] : null, flying: !!(A && A.P.fly), fly: flyS ? { phase: flyS.phase, t: +flyS.t.toFixed(2), then: flyS.then } : null,
+    n: nodes.length, streaming: !!(stream && stream.open), carry: carry && carry.key, steps, platforms: Object.keys(platforms), sprites: Object.keys(sprites), shapes: Object.keys(shapes), followers: Object.keys(followers), mount: mount ? mount.it.key : null, warn: meta.warn || [], movers: movers.length + (node && node.t === 'motion' && st.mv && !st.mv.done ? 1 : 0), size: +curSize().toFixed(2), pos: A ? [Math.round(A.P.x), Math.round(A.P.y)] : null, flying: !!(A && A.P.fly), fly: flyS ? { phase: flyS.phase, t: +flyS.t.toFixed(2), then: flyS.then } : null,
     choices: chipsEl && chipsEl.classList.contains('show') ? [...chipsEl.children].map(b => b.textContent) : []
   });
   D.chipsVisible = () => !!chipsEl && chipsEl.classList.contains('show');
@@ -45,7 +45,7 @@
   // ------------------------------------------------------------ 开演 / 收场
   function teardown() {
     const solidItems = items.some(q => q.solid);
-    active = false; think = null; hideChips(); holdPose = null; animState = null; items = []; carry = null; stream = null; wear = null; focus = null;
+    active = false; think = null; hideChips(); holdPose = null; animState = null; items = []; carry = null; stream = null; wear = null; focus = null; followers = {}; mount = null;
     restoreLook(); setTint({ color: 'none' });
     if (A && A.P.fly) { A.P.fly = false; flyS = null; hov = null; A.startFall(0, 0); }
     flyS = null; hov = null; sprites = {}; movers = []; petSize = 1;
@@ -162,7 +162,8 @@
   // ------------------------------------------------------------ 进入节点
   function enter(n) {
     if (n.fx) spawnFx({ kind: n.fx, n: n.fxn || 3 });
-    if (PET_CTRL.has(n.t) || n.t === 'use' || (n.t === 'motion' && n.who === 'pet')) movers = movers.filter(m => !m.isPet);
+    if (mount && (PET_CTRL.has(n.t) || n.t === 'put' || (n.t === 'use' && n.how !== 'look') || n.t === 'take')) dismount();
+    if (PET_CTRL.has(n.t) || n.t === 'use' || (n.t === 'motion' && n.who === 'pet' && !mount)) movers = movers.filter(m => !m.isPet);
     // 飞着的时候来了需要"站在平台上"的节点 → 先轻轻落地
     if (A.P.fly && (n.t === 'move' || n.t === 'jump' || n.t === 'act')) { endFly(); A.startFall(0, 0); }
     switch (n.t) {
@@ -190,6 +191,12 @@
       case 'tint': setTint(n); return nextOf(n);
       case 'sprite': { const sp = buildSprite(n); if (sp) sprites[n.name] = sp; return nextOf(n); }
       case 'shape': doShape(n); return nextOf(n);
+      case 'follow': {
+        const it = n.who ? findRef(n.who) : items[items.length - 1];
+        if (!it || it === 'pet') { warn('follow 找不到道具 ' + n.who); return nextOf(n); }
+        if (n.stop) delete followers[it.key]; else { if (findRef(n.to) === it) return nextOf(n); followers[it.key] = { to: n.to, gap: n.gap, side: n.side, fly: !!n.fly, speed: n.speed || 1, walkT: 0 }; movers = movers.filter(q => q.it !== it); }
+        return nextOf(n);
+      }
       case 'motion': {
         ensureStory(); if (n.who === 'pet') animState = null;
         const m = makeMover(n); if (!m) return nextOf(n);
@@ -271,7 +278,9 @@
       case 'end': if (st.t >= st.dur) finish(); break;
     }
     if (movers.length) { for (const m of movers) tickMover(m, dt); movers = movers.filter(m => !m.done); }
-    if (A.P.fly && node && node.t !== 'fly' && !petMover()) hoverTick(dt);
+    followTick(dt);
+    if (mount) mountTick(dt);
+    else if (A.P.fly && node && node.t !== 'fly' && !petMover()) hoverTick(dt);
     for (const k in shapes) shapes[k].t += dt;
     updateItems(dt);
     ropeFx(dt);
@@ -362,7 +371,7 @@
   const IN_PLACE = new Set(['sit', 'stand', 'hide', 'ride']);
   function itemBox(it) {
     if (it.bx && !it.carried) return it.bx;
-    const sp = resolveSpr(it), S = A.S(), nn = sp && Pr ? Pr.normalize(sp) : { w: 7, h: 7 }, w = nn.w * S * it.scale, h = nn.h * S * it.scale;
+    const sp = resolveSpr(it), S = A.S(), nn = sp && Pr ? Pr.normalize(sp) : { w: 7, h: 7 }, sc = itemScale(it, sp), w = nn.w * S * sc, h = nn.h * S * sc;
     const anc = sp ? (sp.anchor || 'b') : 'c', bottom = it.free && anc === 'c' ? it.y + h / 2 : it.y;
     return [it.x - w / 2, bottom - h, it.x + w / 2, bottom];
   }
@@ -379,7 +388,7 @@
     return { x: clamp(x, Math.max(pw / 2, pl.x1 + pw * 0.3), Math.min(W - pw / 2, pl.x2 - pw * 0.3)), y: pl.y, air: false };
   }
   function pickTarget(key) {
-    if (key) { const it = items.find(q => q.key === key); if (it) return it; }
+    if (key) { const it = findRef(key); if (it && it !== 'pet') return it; warn('找不到道具 ' + key + ',改用最近的'); }
     let best = null, bd = 1e9; for (const q of items) { if (q.carried) continue; const d = Math.abs(q.x - A.P.x) + Math.abs(q.y - A.P.y) * 0.5; if (d < bd) { bd = d; best = q; } }
     return best || carry;
   }
@@ -466,13 +475,64 @@
     sit(u) { if (once(u, 'did')) holdPose = { legs: 'tuck', eye: 'happy', mouth: 'smile' }; return u.t > 0.3; },
     stand(u) { if (once(u, 'did')) A.stars(2); return u.t > 0.3; },
     hide(u, it) { if (once(u, 'did')) { it.layer = 'front'; holdPose = { sy: 0.88, sx: 1.06, eye: 'dots', ey: -1 }; } return u.t > 0.4; },
-    ride(u, it) { if (once(u, 'did')) doTake(Object.assign({}, u.n, { key: it.key, at: 'under', sink: u.n.sink != null ? u.n.sink : 0.5 })); return u.t > 0.4; }
+    ride(u, it, dt) {
+      const b = itemBox(it), big = b[2] - b[0] > A.petW() * 2.4 || b[3] - b[1] > A.petH() * 1.4;
+      if (!big) { if (once(u, 'did')) doTake(Object.assign({}, u.n, { key: it.key, at: 'under', sink: u.n.sink != null ? u.n.sink : 0.5 })); return u.t > 0.4; }
+      // 大道具(船 龙 摩天轮 火车…):宠物爬到它上面,之后道具怎么动、怎么转,宠物都跟着
+      if (!u.hop) { u.hop = true; freeItem(it); delete followers[it.key]; const seat = seatPoint(it, u.n.sink); u.mv = makeMover({ who: 'pet', path: [[seat[0] / A.W(), seat[1] / A.H()]], hop: Math.max(0.6, (A.P.y - seat[1]) / A.petH() + 0.6), sec: 0.6, pace: 'linear', then: 'stay', face: 'keep' }); return false; }
+      if (once(u, 'did')) startMount(it); return u.t > 0.25;
+    }
   };
+  /** 骑上大道具时坐的位置:道具顶部中间,往下陷 sink */
+  function seatPoint(it, sink) { const b = itemBox(it), h = b[3] - b[1]; return [(b[0] + b[2]) / 2, b[1] + Math.min(h * 0.5, (sink != null ? sink : 0.15) * h)]; }
+  function startMount(it) {
+    const P = A.P, dp = it.dp || [it.x, it.y, 0], c = Math.cos(-dp[2]), sn = Math.sin(-dp[2]), dx = P.x - dp[0], dy = P.y - dp[1];
+    mount = { it, ox: dx * c - dy * sn, oy: dx * sn + dy * c, layer: it.layer };      // 记在道具自己的坐标系里(道具转,宠物就绕着转)
+    it.layer = 'back';                                                // 骑着的大道具画在宠物身后,不然会把宠物挡住
+    P.plat = null; P.platKey = null; P.fly = true; hov = null; flyS = null; focus = null;
+  }
+  function mountTick() {
+    const P = A.P, it = mount.it;
+    if (!items.includes(it) || it.carried) return dismount();
+    const dp = it.dp || [it.x, it.y, 0], c = Math.cos(dp[2]), sn = Math.sin(dp[2]);
+    P.x = dp[0] + mount.ox * c - mount.oy * sn; P.y = dp[1] + mount.ox * sn + mount.oy * c;    // 宠物保持直立(像摩天轮的吊舱)
+    P.legT += 0.02;
+  }
+  function dismount() { if (!mount) return; if (items.includes(mount.it)) mount.it.layer = mount.layer || 'front'; mount = null; const P = A.P; P.fly = false; hov = null; A.startFall(P.face * 60 * A.k(), -220 * A.k()); }
+  // ------------------------------------------------------------ 跟随:道具跟着宠物 / 鼠标 / 别的道具走(遛狗、跟班、被追)
+  function followTick(dt) {
+    const P = A.P, S = A.S(), k = A.k(), ph = A.petH();
+    for (const key in followers) {
+      const f = followers[key], it = items.find(q => q.key === key);
+      if (!it || it.carried) { delete followers[key]; continue; }
+      if (it.falling) continue;
+      let tx, ty, tface = 1, air = false;
+      const tr = f.to === 'cursor' ? 'cursor' : findRef(f.to);
+      if (tr === 'pet') { tx = P.x; ty = P.y; tface = P.face; air = !P.plat; }
+      else if (tr === 'cursor') { tx = A.cur.x; ty = A.cur.y; air = true; }
+      else if (tr) { const c = itemPt(tr, 'bottom'); tx = c[0]; ty = c[1]; tface = tr.flip ? -1 : 1; }
+      else { delete followers[key]; continue; }
+      const side = f.side === 'behind' ? -tface : f.side === 'front' ? tface : (Math.sign(it.x - tx) || -tface);
+      const gx = tx + side * f.gap * ph, d = gx - it.x, sp = Math.min(Math.abs(d) * 3, 340 * k * f.speed);
+      if (f.fly || (air && tr === 'cursor' && f.fly !== false && it.free)) {         // 会飞的跟班:在空中跟
+        it.free = true; it.x += clamp(d, -sp * dt * 2, sp * dt * 2); it.y += ((ty - ph * 0.8) - it.y) * Math.min(1, dt * 3);
+      } else {
+        if (it.free) { dropItem(it); continue; }                // 先落到地上再走
+        const step = clamp(d, -sp * dt, sp * dt); it.x += step;
+        const pl = A.platBelow(it.x, it.y - 2);
+        if (pl.y > it.y + 4) { dropItem(it, step / Math.max(dt, 1e-3), 0); continue; }   // 走出平台边缘 → 掉下去
+        it.y = pl.y;
+      }
+      const moving = Math.abs(d) > 3;
+      f.walkT = moving ? f.walkT + dt * 12 : 0; it.hopY = moving ? Math.abs(Math.sin(f.walkT)) * 2.2 * S : 0;
+      if (Math.abs(d) > 6) { const emo = !!it.emoji || (!!it.art && !sprites[it.art] && !(Pr && Pr.get(it.art))); it.flip = emo ? d > 0 : d < 0; }   // 朝着走的方向(emoji 动物大多朝左,内置像素图朝右)
+    }
+  }
   function throwTarget(n) {
     const W = A.W(), H = A.H(), P = A.P;
     if (n.to === 'cursor') return [A.cur.x, A.platBelow(A.cur.x, A.cur.y).y];
     if (Array.isArray(n.to)) return [n.to[0] * W, n.to[1] * H];
-    if (typeof n.to === 'string') { const t = items.find(q => q.key === n.to.split('.')[0]); if (t) { const b = itemBox(t); return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]; } }
+    if (typeof n.to === 'string') { const t = findRef(n.to.split('.')[0]); if (t && t !== 'pet') { const b = itemBox(t); return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]; } }
     const x = clamp(P.x + P.face * W * 0.3, 20, W - 20); return [x, A.platBelow(x, P.y - 40).y];
   }
   /** 互动时的姿势(叠在最后) */
@@ -592,12 +652,44 @@
     }
     return segs;
   }
+  /** 把路线里的各种写法统一成"屏幕比例坐标 / 相对身高":像素坐标换算、只给 x 或 y 的补全、to 指向某个目标 */
+  function resolvePath(n, x0, y0) {
+    const W = A.W(), H = A.H(), ph = A.petH(), P = A.P;
+    let pts = (n.path || []).map(p => {
+      if (n.rel) return [p[0] == null ? 0 : p[0], p[1] == null ? 0 : p[1]];
+      let x = p[0], y = p[1];
+      if (n.pix) { x = x == null ? null : x / Math.max(W, x > W ? 1920 : W); y = y == null ? null : y / Math.max(H, y > H ? 1080 : H); }
+      return [x == null ? x0 / W : x, y == null ? y0 / H : y];
+    });
+    if (n.toRef) {
+      let t = null; const gy = A.groundY() / H;
+      switch (n.toRef) {
+        case 'top': case 'sky': t = [x0 / W, 0.08]; break;
+        case 'ground': case 'bottom': t = [x0 / W, gy]; break;
+        case 'left': t = [0.1, y0 / H]; break; case 'right': t = [0.9, y0 / H]; break; case 'center': t = [0.5, y0 / H]; break;
+        case 'up': t = [x0 / W, Math.max(0.05, y0 / H - 0.3)]; break; case 'down': t = [x0 / W, Math.min(gy, y0 / H + 0.3)]; break;
+        case 'away': case 'offscreen': t = [x0 / W, -0.25]; break;
+        case 'cursor': case 'mouse': t = [A.cur.x / W, A.cur.y / H]; break;
+        default: { const r = findRef(n.toRef); if (r === 'pet') t = [P.x / W, (P.y - 5 * A.S()) / H]; else if (r) { const c = itemPt(r, 'center'); t = [c[0] / W, c[1] / H]; } else warn('motion 的目标 ' + n.toRef + ' 找不到'); }
+      }
+      if (t) { if (n.rel) pts.push([(t[0] * W - x0) / ph, (t[1] * H - y0) / ph]); else pts.push(t); }
+    }
+    return pts;
+  }
   function makeMover(n) {
-    const P = A.P, isPet = n.who === 'pet';
-    let it = null;
+    const P = A.P;
+    let who = n.who === 'pet' ? 'pet' : findRef(n.who);
+    if (!who) { warn('motion 找不到要动的东西 "' + n.who + '"(没有这个 key / 道具名)'); return null; }
+    let it = who === 'pet' ? null : who;
+    // 宠物骑着 / 举着这个道具 → 动的其实是宠物(道具跟着);宠物骑在大道具上 → 动的其实是那个大道具(宠物跟着)
+    if (it && it === carry && (carry.at === 'under' || carry.at === 'hands')) { const sh = itemPt(it, carry.at === 'under' ? 'bottom' : 'center'); n = Object.assign({}, n, { who: 'pet' }); n.__shift = [P.x - sh[0], P.y - sh[1]]; it = null; }
+    else if (!it && mount && items.includes(mount.it)) { const m = mount.it; n = Object.assign({}, n, { who: m.key }); n.__shift = [m.x - P.x, m.y - P.y]; it = m; }
+    const isPet = !it;
     if (isPet) { if (P.mode === 'grab' || P.mode === 'hold') return null; }
-    else { it = items.find(q => q.key === n.who); if (!it) return null; freeItem(it); movers = movers.filter(m => m.it !== it); }
+    else { freeItem(it); movers = movers.filter(q => q.it !== it); delete followers[it.key]; }
     const x0 = isPet ? P.x : it.x, y0 = isPet ? P.y : it.y;
+    n = Object.assign({}, n, { path: resolvePath(n, x0, y0), pix: false, toRef: null });
+    if (n.__shift && !n.rel) n.path = n.path.map(p => [p[0] + n.__shift[0] / A.W(), p[1] + n.__shift[1] / A.H()]);
     const segs = buildSegs(n, x0, y0), total = segs.reduce((a, q) => a + q.len, 0) || 1;
     const m = { n, isPet, it, segs, total, t: 0, dur: n.sec, x: x0, y: y0, vx: 0, vy: 0, phase: 1, spinR: 0, tilt: 0, u: 0, trailT: 0, size0: petSize, scale0: it ? it.scale : 1, startPlat: isPet ? P.plat : null };
     if (isPet) { P.plat = null; P.platKey = null; P.vx = P.vy = 0; P.fly = true; hov = null; flyS = null; if (P.mode !== 'story') A.setMode('story'); }
@@ -620,7 +712,13 @@
       m.t += dt; const u = clamp(m.t / m.dur, 0, 1);
       let [x, y] = moverPos(m, u);
       if (m.isPet) { x = clamp(x, A.petW() / 2, A.W() - A.petW() / 2); y = clamp(y, topLimit(), A.groundY()); }
-      else { x = clamp(x, -60, A.W() + 60); y = clamp(y, -60, A.H() + 60); }
+      else {
+        x = clamp(x, -60, A.W() + 60); y = clamp(y, -60, A.H() + 60);
+        if (mount && m.it === mount.it) {                    // 宠物骑在上面:别把它带出屏幕
+          const r = (m.it.dp ? m.it.dp[2] : 0), ox = mount.ox * Math.cos(r) - mount.oy * Math.sin(r), oy = mount.ox * Math.sin(r) + mount.oy * Math.cos(r), pw = A.petW() / 2;
+          y = Math.max(y, topLimit() - oy); x = clamp(x, pw - ox, A.W() - pw - ox);
+        }
+      }
       const id = 1 / Math.max(dt, 1e-3);
       m.vx = lerp(m.vx, (x - m.x) * id, 0.45); m.vy = lerp(m.vy, (y - m.y) * id, 0.45);
       m.x = x; m.y = y; m.u = u;
@@ -697,6 +795,7 @@
     if (carry && carry.carried && carry.bx && (carry.at === 'head' || carry.at === 'hands' || carry.at === 'under') && carry.bx[1] > top - 45 * S) top = Math.min(top, carry.bx[1]);
     return top;
   };
+  D.__findRef = k => { const r = findRef(k); if (!r || r === 'pet') return null; if (r.carried) { const c = itemPt(r, 'center'); return { x: c[0], y: c[1], dp: [c[0], c[1], 0] }; } return { x: r.x, y: r.y, dp: r.dp }; };   // 测试用
   D.__item = k => { const it = items.find(q => q.key === k); return it ? { x: it.x, y: it.y, art: it.art, shake: it.shake || 0, falling: !!it.falling, roll: !!it.roll, bx: it.bx, carried: it.carried } : null; };   // 测试用
   D.__itemPos = k => { const it = items.find(q => q.key === k); return it ? itemPt(it, 'center') : null; };   // 测试用
   function anchor(name) {
@@ -731,7 +830,8 @@
   function spt(v) {
     if (Array.isArray(v)) return [v[0] * A.W(), v[1] * A.H()];
     if (BODY_ANCH.has(v)) return anchor(v);
-    const [k, part] = String(v).split('.'), it = items.find(q => q.key === k);
+    const [k, part] = String(v).split('.'), it = findRef(k);
+    if (it === 'pet') return anchor('pet');
     return it ? itemPt(it, part) : null;
   }
 
@@ -893,12 +993,15 @@
   const recSpr = (sp, it) => (sp && it.recolor ? Pr.recolor(sp, it.recolor) : sp);
   const resolveSpr = it => {
     if (!Pr) return null;
-    if (!it.art) return it.emoji ? Pr.fromEmoji(it.emoji, it.px || 16) : null;     // emoji 也画成像素风
+    if (!it.art) return it.emoji ? Pr.fromEmoji(it.emoji, emojiGrid(it)) : null;     // emoji 也画成像素风
     const s = sprites[it.art];
     if (s) return recSpr(s.frames && s.frames.length > 1 ? s.frames[Math.floor(it.t * s.fps) % s.frames.length] : s, it);
-    return recSpr(Pr.byName(it.art, it.px || 16) || Pr.get('box'), it);
+    return recSpr(Pr.byName(it.art, emojiGrid(it)) || Pr.get('box'), it);
   };
-  const sprH = it => { const sp = resolveSpr(it); return (sp && Pr ? Pr.normalize(sp).h : 6) * it.scale; };   // 道具高度(像素格)
+  /** emoji 放得越大,像素化时用越细的格子(否则放大 5 倍会糊成一团);屏幕上的尺寸保持不变 */
+  const emojiGrid = it => it.px || clamp(Math.round(16 * Math.pow(Math.max(1, it.scale / 0.75), 0.6)), 16, 32);
+  const itemScale = (it, sp) => it.scale * (sp && !it.px && /^emoji:/.test(sp.name || '') ? 16 / emojiGrid(it) : 1);
+  const sprH = it => { const sp = resolveSpr(it); return (sp && Pr ? Pr.normalize(sp).h : 6) * itemScale(it, sp); };   // 道具高度(像素格)
   /** 让道具变成"自由悬空"的坐标(x,y = 锚点位置) */
   function freeItem(it) {
     const sp = resolveSpr(it), anc = sp ? (sp.anchor || 'b') : 'c';
@@ -915,11 +1018,14 @@
     it.free = false; it.falling = true; it.vx = vx || 0; it.vy = vy || 0; it.rotM = 0;
   }
   function addItem(n) {
+    if (n.pix) { const W = A.W(), H = A.H(); n = Object.assign({}, n); if (n.x != null) n.x = clamp(n.x / (n.x > W ? 1920 : W), 0, 1); if (n.y != null) n.y = clamp(n.y / (n.y > H ? 1080 : H), 0.05, 0.98); }
+    if (n.art && !sprites[n.art] && Pr && !Pr.get(n.art) && !Pr.byName(n.art)) warn('不认识的道具名 "' + n.art + '",画成了纸箱');
     const old = n.key && items.find(q => q.key === n.key);
     if (old && !n.at && n.x == null && n.y == null) {          // 同一个 key、没给位置 = 原地换样子(比如宝箱打开、蛋孵出小鸡)
       old.art = n.art || ''; old.emoji = n.emoji || ''; old.px = n.px || 0; old.recolor = n.recolor || null; if (n.scale) old.scale = n.scale;
       if (n.anim) old.anim = n.anim; if (n.solid) old.solid = true; old.bx = null; A.stars(3); if (old.solid) pushPlats(); return;
     }
+    const glide = old && !old.carried && (n.at || n.x != null || n.y != null);   // 同一个道具换了位置 → 走 / 飘过去,而不是瞬移
     n = Object.assign({ at: 'near' }, n);
     const P = A.P, pl = P.plat || { x1: 0, x2: A.W(), y: P.y }, pw = A.petW(), k = A.k(), S = A.S(), W = A.W(), H = A.H();
     let x, y = pl.y, free = false;
@@ -941,7 +1047,15 @@
       const b = itemBox(it), h = b[3] - b[1], pl = A.platBelow(it.x, b[1]);
       if (pl && Math.abs(pl.y - b[3]) < h * 0.6 + 8 * S) { it.free = false; it.y = pl.y; }
     }
-    items = items.filter(q => q.key !== it.key); items.push(it); if (items.length > 10) { const k = items.findIndex(q => !q.carried); items.splice(k < 0 ? 0 : k, 1); }
+    if (glide) {
+      const b = itemBox(it), sp = resolveSpr(it), anc = sp ? (sp.anchor || 'b') : 'c', W = A.W(), H = A.H();
+      const tx = it.x, ty = it.free ? it.y : (anc === 'c' ? it.y - (b[3] - b[1]) / 2 : it.y), d = Math.hypot(tx - old.x, ty - old.y);
+      const grounded = !old.free && !it.free;
+      const m = makeMover({ who: old.key, path: [[tx / W, ty / H]], sec: clamp(d / 320, 0.5, 2.5), pace: 'smooth', hop: grounded ? 0.35 : 0, face: 'auto', then: it.free ? 'stay' : 'land' });
+      if (m) { movers.push(m); if (n.follow) followers[old.key] = { to: n.follow, gap: 1.3, side: 'any', fly: false, speed: 1, walkT: 0 }; return; }
+    }
+    items = items.filter(q => q.key !== it.key); items.push(it);
+    if (n.follow) followers[it.key] = { to: n.follow, gap: 1.3, side: 'any', fly: false, speed: 1, walkT: 0 }; if (items.length > 10) { const k = items.findIndex(q => !q.carried); items.splice(k < 0 ? 0 : k, 1); }
     if (it.solid || (old && old.solid)) setTimeout(pushPlats, 60);       // 能站的道具(箱子、石头…):等画出来知道尺寸再加平台
   }
   function removeItems(r) {
@@ -950,7 +1064,19 @@
     else { items = items.filter(q => q.key !== r); if (carry && carry.key === r) carry = null; }
     if (hadSolid) pushPlats();
   }
-  function findItem(key) { return (key && items.find(q => q.key === key)) || items[items.length - 1] || null; }
+  /** 模型指代道具的方式五花八门:key / 道具名(rocket)/ emoji / 别名(火箭)/ 被截断的长 key → 都尽量对上 */
+  const PET_REF = new Set(['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角']);
+  function findRef(ref, opt) {
+    if (ref == null || ref === '') return null;
+    const r = String(ref), lo = r.toLowerCase();
+    if (PET_REF.has(lo)) return 'pet';
+    const live = items.slice().reverse();                     // 同名的取最近放的那个
+    const em = Pr && Pr.ALIAS ? Pr.ALIAS[lo] || Pr.ALIAS[lo.replace(/s$/, '')] : null;
+    return live.find(q => q.key === r) || live.find(q => q.key === r.slice(0, 8)) || live.find(q => q.art === r || q.art === lo) || live.find(q => q.emoji && q.emoji === r)
+      || (em && live.find(q => q.emoji === em || (Pr.ALIAS[q.art] === em))) || live.find(q => q.art && (q.art.startsWith(lo) || lo.startsWith(q.art)) && q.art.length >= 3) || null;
+  }
+  function warn(msg) { meta.warn = meta.warn || []; if (meta.warn.length < 40) meta.warn.push(msg); if (A && A.storyWarn) A.storyWarn(msg); }
+  function findItem(key) { const r = findRef(key); return (r && r !== 'pet' ? r : null) || (key ? null : items[items.length - 1]) || items[items.length - 1] || null; }
   function doTake(n) {
     let it = n.key ? items.find(q => q.key === n.key) : null;
     if (!it) { let best = null, bd = 1e9; for (const q of items) { if (q.carried) continue; const d = Math.abs(q.x - A.P.x) + Math.abs(q.y - A.P.y); if (d < bd) { bd = d; best = q; } } it = best; }
@@ -1027,7 +1153,7 @@
     return { o, dx, dy };
   }
   function drawItem(ctx, u, dpr, touch, it, now, S, P) {
-    const spr = resolveSpr(it), px = u * it.scale * (it.eat ? 1 - it.eat * 0.85 : 1), a = animOf(it, now);
+    const spr = resolveSpr(it), px = u * itemScale(it, spr) * (it.eat ? 1 - it.eat * 0.85 : 1), a = animOf(it, now);
     if (it.pulse > 0) { a.o.sx = a.o.sy = 1 + Math.sin(it.pulse * 14) * 0.1; }
     let x = it.x + a.dx, y = it.y + a.dy, o = Object.assign({ flip: it.flip }, a.o), strings = false;
     const szD = spr ? Pr.size(spr, Math.max(1, Math.round(px))) : { w: 0, h: 0 }, szc = { w: szD.w / dpr, h: szD.h / dpr };   // 屏幕上的 CSS 像素尺寸
@@ -1055,6 +1181,7 @@
       if (it.rotM) o.rot = (o.rot || 0) + it.rotM;
     }
     if (it.shake > 0) x += Math.sin(it.t * 55) * 1.4 * S * Math.min(1, it.shake / 0.3);
+    if (it.hopY && !it.carried) y -= it.hopY;
     if (!spr) {                                           // emoji 道具(旧写法)
       const qy = it.carried ? y - 3 * S : (it.free ? y : it.y - 5.5 * S + a.dy), r = 1.3 * S * it.scale * 2.3;
       Rig.drawParticle(ctx, u, dpr, { k: 'text', text: it.emoji, x, y: qy, life: 1, max: 1, size: 2.3 * it.scale, rot: o.rot });
@@ -1070,6 +1197,14 @@
       else { const by = anc === 'c' ? y + szc.h / 2 : y; ctx.moveTo(hR[0] * dpr, hR[1] * dpr); ctx.quadraticCurveTo(((hR[0] + x) / 2) * dpr, (Math.max(hR[1], by) + 6 * S) * dpr, x * dpr, by * dpr); }
       ctx.stroke(); ctx.restore();
       touch(Math.min(hR[0], hL[0], x) - 60, Math.min(y - szc.h, hR[1]) - 10, Math.max(hR[0], hL[0], x) + 60, Math.max(hR[1], y) + 20);
+    }
+    if (!it.carried) {
+      it.dp = [x, y, o.rot || 0];                                     // 记下实际的位置和角度(骑在上面的宠物跟着它转)
+      // 立在地上、又不是圆的东西(带底座的摩天轮、房子、树…)没法绕中心整体转:画面保持不动,只让骑在上面的东西绕着转
+      if (Math.abs(o.rot || 0) > 0.35 && it.bx && Pr.roundness(spr) < 0.8) {
+        const b = it.bx, pl = A.platBelow((b[0] + b[2]) / 2, b[3] - 6 * S);
+        if (Math.abs(pl.y - b[3]) < 6 * S) o.rot = 0;
+      }
     }
     const box = Pr.draw(ctx, spr, x * dpr, y * dpr, px, o);
     if (box) touch(box.x1 / dpr - 6, box.y1 / dpr - 6, box.x2 / dpr + 6, box.y2 / dpr + 6);
@@ -1187,6 +1322,7 @@
       p.lift = (p.lift || 0) + Math.max(0, sprH(carry) - carry.sink * 9); p.shadow = 0;   // sink 按宠物身体算:0=站在上面,0.5≈陷到腰,1≈只露出脑袋
       if (carry.sink >= 0.3 && !(pm && pm.n.keys && pm.n.keys.some(q => q.legs))) p.legs = 'tuck';
     }
+    if (mount) { p.legs = 'tuck'; p.shadow = 0; p.dy = 0; if (!hp.eye) p.eye = 'happy'; }
     const uu = node && (node.t === 'use' || node.t === 'take') && st.u;
     if (uu && uu.ph === 'act' && !uu.mv && USE_POSE[uu.how]) USE_POSE[uu.how](p, uu.t, uu);
     // 眼睛看着正在打交道的道具
