@@ -34,7 +34,7 @@
   const TRAILS = ['dust', 'smoke', 'fire', 'star', 'sparkle', 'heart', 'note', 'bubbles', 'snow', 'speed'];
   const SHAPES = ['line', 'rect', 'circle', 'arc'];
   const ANCHORS = ['pet', 'hand', 'handL', 'hands', 'head', 'feet'];
-  const COLORS = { red: '#e04b4b', orange: '#f2994a', yellow: '#f6c945', green: '#4caf50', blue: '#4f8fe0', sky: '#8fd3ff', water: '#3d9be9', purple: '#b06fd6', pink: '#ff8fb8', brown: '#8b5a3c', wood: '#a8733f', gray: '#9aa3ad', grey: '#9aa3ad', white: '#ffffff', black: '#2b211c', gold: '#f6c945', rope: '#c9a46a', grass: '#5fbf5f', snow: '#f4f8ff', ice: '#bfe9ff' };
+  const COLORS = { red: '#e04b4b', orange: '#f2994a', yellow: '#f6c945', green: '#4caf50', blue: '#4f8fe0', sky: '#8fd3ff', water: '#3d9be9', purple: '#b06fd6', pink: '#ff8fb8', brown: '#8b5a3c', wood: '#a8733f', gray: '#9aa3ad', grey: '#9aa3ad', white: '#ffffff', black: '#2b211c', gold: '#f6c945', rope: '#c9a46a', grass: '#5fbf5f', snow: '#f4f8ff', ice: '#bfe9ff', silver: '#c9d1d9', cream: '#f7e6c4', skin: '#f2c9a0', dark: '#3a2a22', navy: '#2f3f7a', cyan: '#6cc3ff', lime: '#9be15d', beige: '#e8d5b0', violet: '#8f5fd6', magenta: '#e05bd0', teal: '#2fa59a', olive: '#8a9a3a', maroon: '#7a2a2a', 红: '#e04b4b', 橙: '#f2994a', 黄: '#f6c945', 绿: '#4caf50', 蓝: '#4f8fe0', 紫: '#b06fd6', 粉: '#ff8fb8', 棕: '#8b5a3c', 灰: '#9aa3ad', 白: '#ffffff', 黑: '#2b211c', 金: '#f6c945' };
   const FLY_TO = ['top', 'bottom', 'ground', 'left', 'right', 'center', 'cursor', 'up', 'down', 'point'];
   const FLY_STYLE = ['float', 'dash', 'bounce'];
   const FLY_THEN = ['hover', 'fall', 'land'];
@@ -67,9 +67,34 @@
     return pair(v, -0.2, 1.2);
   }
   function rowsOf(a) {
+    if (typeof a === 'string') a = a.split(/\r?\n/);
     if (!Array.isArray(a)) return null;
-    const rows = a.slice(0, 24).map(r => String(r == null ? '' : r).replace(/[\u0000-\u001f\u007f\s]/g, '.').slice(0, 24));
+    const rows = a.slice(0, 32).map(r => String(r == null ? '' : r).replace(/[\u0000-\u001f\u007f\s]/g, '.').slice(0, 32));
     return rows.length >= 2 && rows.some(r => /[^.]/.test(r)) ? rows : null;
+  }
+  const SHP = ['rect', 'circle', 'ellipse', 'tri', 'poly', 'line'];
+  const n36 = v => num(v, -4, 36, 0);
+  function shapeList(a) {
+    if (!Array.isArray(a)) return null;
+    const out = [];
+    for (const q of a.slice(0, 60)) {
+      if (!q || typeof q !== 'object') continue;
+      const k = SHP.includes(q.k) ? q.k : SHP.includes(q.kind) ? q.kind : null; if (!k) continue;
+      const o = { k, c: str(q.c != null ? q.c : q.color, 12) || 'K' };
+      for (const f of ['x', 'y', 'w', 'h', 'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2', 't']) if (q[f] != null) o[f] = n36(q[f]);
+      if (q.cx != null && o.x == null) o.x = n36(q.cx); if (q.cy != null && o.y == null) o.y = n36(q.cy);
+      if (Array.isArray(q.pts)) o.pts = q.pts.slice(0, 16).map(p => pair(p, -4, 36)).filter(Boolean);
+      if ((k === 'tri' || k === 'poly') && (!o.pts || o.pts.length < 3)) continue;
+      if (q.erase) o.c = '.';
+      out.push(o);
+    }
+    return out.length ? out : null;
+  }
+  function recolorMap(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+    const out = {}; let n = 0;
+    for (const k of Object.keys(o)) { if ([...k].length !== 1 || n >= 8) continue; const c = color(o[k], ''); if (c) { out[k] = c; n++; } }
+    return n ? out : null;
   }
   function keyframes(a) { return a.slice(0, 24).map(k => Object.assign({ t: num(k && k.t, 0, 1, 0) }, pose(k))).sort((x, y) => x.t - y.t); }
 
@@ -130,6 +155,8 @@
         else {
           const e = str(n.emoji, 8), art = key(n.art, 10);
           if (art) c.art = art; else if (EMOJI.test(e)) c.emoji = e; else return null;
+          if (n.px != null) c.px = Math.round(num(n.px, 8, 32, 16));
+          const rc = recolorMap(n.recolor); if (rc) c.recolor = rc;
           c.at = ATS.includes(n.at) ? n.at : 'near';
           if (n.x != null) c.x = num(n.x, 0, 1, 0.5);
           if (n.y != null) c.y = num(n.y, 0.05, 0.98, 0.5);
@@ -189,15 +216,26 @@
       case 'end': c.text = str(n.text, 50); break;
       case 'sprite': {
         const name = key(n.name, 8); if (!name) return null;
+        ids.__sp = (ids.__sp || 0) + 1; if (ids.__sp > 12) return null;
+        c.name = name; c.anchor = n.anchor === 'c' ? 'c' : n.anchor === 'b' ? 'b' : '';
+        if (n.shade != null) c.shade = !!n.shade;
+        if (n.outline) c.outline = n.outline === true ? true : (color(n.outline, '') || true);
+        if (n.mirror) c.mirror = true;
+        const pal = {};
+        if (n.pal && typeof n.pal === 'object' && !Array.isArray(n.pal)) {
+          let cnt = 0; for (const ch of Object.keys(n.pal)) { if ([...ch].length !== 1 || ch === '.' || cnt >= 16) continue; const v = color(String(n.pal[ch]), ''); if (v) { pal[ch] = v; cnt++; } }
+        }
+        c.pal = pal;
+        // 四种画法,任选其一:emoji 像素化 / 内置道具换色 / 几何形状 / 字符画
+        const e = str(n.emoji, 8);
+        if (EMOJI.test(e)) { c.emoji = e; if (n.px != null) c.px = Math.round(num(n.px, 8, 32, 16)); break; }
+        if (n.base != null && key(n.base, 10)) { c.base = key(n.base, 10); const rc = recolorMap(n.recolor); if (rc) c.recolor = rc; break; }
+        const shp = shapeList(n.shapes);
+        if (shp) { c.shapes = shp; c.w = Math.round(num(n.w, 4, 32, 16)); c.h = Math.round(num(n.h, 4, 32, 16)); break; }
         const frames = Array.isArray(n.frames) ? n.frames.slice(0, 4).map(rowsOf).filter(Boolean) : [];
         const rows = rowsOf(n.rows) || frames[0]; if (!rows) return null;
         if (frames.length > 1) { c.frames = frames; c.fps = num(n.fps, 1, 12, 4); }
-        const pal = {};
-        if (n.pal && typeof n.pal === 'object' && !Array.isArray(n.pal)) {
-          let cnt = 0; for (const ch of Object.keys(n.pal)) { if ([...ch].length !== 1 || ch === '.' || cnt >= 12) continue; const v = String(n.pal[ch]); if (/^#[0-9a-fA-F]{6}$/.test(v)) { pal[ch] = v; cnt++; } }
-        }
-        ids.__sp = (ids.__sp || 0) + 1; if (ids.__sp > 8) return null;
-        c.name = name; c.rows = rows; c.pal = pal; c.anchor = n.anchor === 'c' ? 'c' : 'b';
+        c.rows = rows;
         break;
       }
       case 'platform': {

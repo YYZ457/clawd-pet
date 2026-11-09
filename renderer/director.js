@@ -182,7 +182,7 @@
       case 'put': ensureStory(); doPut(); st.dur = 0.4; return;
       case 'wear': ensureStory(); doWear(n); st.dur = 0.6; return;
       case 'tint': setTint(n); return nextOf(n);
-      case 'sprite': sprites[n.name] = { name: n.name, rows: n.rows, pal: n.pal, anchor: n.anchor, fps: n.fps || 4, frames: n.frames ? n.frames.map(r => ({ rows: r, pal: n.pal, anchor: n.anchor })) : null }; return nextOf(n);
+      case 'sprite': { const sp = buildSprite(n); if (sp) sprites[n.name] = sp; return nextOf(n); }
       case 'shape': doShape(n); return nextOf(n);
       case 'motion': {
         ensureStory(); if (n.who === 'pet') animState = null;
@@ -732,11 +732,27 @@
   }
 
   // ------------------------------------------------------------ 道具(内置像素图 / 模型自己画的像素图 / emoji)
+  /** 模型的 sprite 节点 → 可画的像素图(emoji 像素化 / 内置道具换色 / 几何形状栅格化 / 修复过的字符画) */
+  function buildSprite(n) {
+    if (!Pr) return null;
+    const shade = n.shade !== false, anchor = n.anchor || '';
+    const fix = sp => { if (sp && anchor) sp.anchor = anchor; return sp; };
+    try {
+      if (n.emoji) { const e = Pr.fromEmoji(n.emoji, n.px || 16); return e ? fix(Object.assign({}, e)) : null; }
+      if (n.base) { const b = sprites[n.base] || Pr.byName(n.base); return b ? fix(Object.assign({}, Pr.recolor(b, n.recolor))) : null; }
+      if (n.shapes) return fix(Pr.fromShapes({ w: n.w, h: n.h, shapes: n.shapes, pal: n.pal, mirror: n.mirror, shade, outline: n.outline }));
+      const one = rows => Pr.fromRows({ rows, pal: n.pal, mirror: n.mirror, shade, outline: n.outline, anchor: anchor || 'b' });
+      if (n.frames) { const fr = n.frames.map(one).filter(Boolean); if (!fr.length) return null; return Object.assign({}, fr[0], { frames: fr, fps: n.fps || 4 }); }
+      return one(n.rows);
+    } catch (_) { return null; }
+  }
+  const recSpr = (sp, it) => (sp && it.recolor ? Pr.recolor(sp, it.recolor) : sp);
   const resolveSpr = it => {
-    if (!it.art) return null;
+    if (!Pr) return null;
+    if (!it.art) return it.emoji ? Pr.fromEmoji(it.emoji, it.px || 16) : null;     // emoji 也画成像素风
     const s = sprites[it.art];
-    if (s) return s.frames && s.frames.length > 1 ? s.frames[Math.floor(it.t * s.fps) % s.frames.length] : s;
-    return (Pr && Pr.get(it.art)) || (Pr && Pr.get('box'));
+    if (s) return recSpr(s.frames && s.frames.length > 1 ? s.frames[Math.floor(it.t * s.fps) % s.frames.length] : s, it);
+    return recSpr(Pr.byName(it.art, it.px || 16) || Pr.get('box'), it);
   };
   const sprH = it => { const sp = resolveSpr(it); return (sp && Pr ? Pr.normalize(sp).h : 6) * it.scale; };   // 道具高度(像素格)
   /** 让道具变成"自由悬空"的坐标(x,y = 锚点位置) */
@@ -769,8 +785,9 @@
     if (n.x != null) { x = n.x * W; free = true; }
     if (n.y != null) { y = n.y * H; free = true; }
     const lo = free ? 16 : pl.x1 + pw * 0.6, hi = free ? W - 16 : pl.x2 - pw * 0.6;
-    const it = { key: n.key || ('i' + (++itemSeq)), art: n.art || '', emoji: n.emoji || '', x: clamp(x, lo, Math.max(lo, hi)), y, free, scale: n.scale || 1, anim: n.anim || '', layer: n.layer || 'front', flip: !!n.flip, t: 0, carried: false, how: 'head' };
-    items = items.filter(q => q.key !== it.key); items.push(it); if (items.length > 6) items.shift();
+    const viaEmoji = !!n.emoji || (n.art && !sprites[n.art] && !(Pr && Pr.get(n.art)));          // emoji 像素图默认小一点,和宠物差不多大
+    const it = { key: n.key || ('i' + (++itemSeq)), art: n.art || '', emoji: n.emoji || '', px: n.px || 0, recolor: n.recolor || null, x: clamp(x, lo, Math.max(lo, hi)), y, free, scale: n.scale || (viaEmoji ? 0.75 : 1), anim: n.anim || '', layer: n.layer || 'front', flip: !!n.flip, t: 0, carried: false, how: 'head' };
+    items = items.filter(q => q.key !== it.key); items.push(it); if (items.length > 10) { const k = items.findIndex(q => !q.carried); items.splice(k < 0 ? 0 : k, 1); }
   }
   function removeItems(r) {
     if (r === true) { items = []; carry = null; return; }

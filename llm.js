@@ -19,9 +19,17 @@ anim{dur≤20,keys:[{t:0~1,姿态}],hold?,loop?1~8} 自编动作(原地),关键�
 move{to:left|right|center|cursor|item|up|down|window|ground|plat|point,item?,run?} 走过去。cursor=真的去追用户的鼠标(会跳上跳下,x 和 y 都会靠近);item=走到道具;up/down/window=跳到更高/更低/随机的别的窗口上;ground=回到地面;plat(key,at:left|right|center)=走到自己造的平台上(够不着会自动大跳);point(x,y 屏幕比例)
 face{dir:left|right|cursor}
 fx{kind:heart star note confetti dust zzz text question exclaim sweat anger sparkle snow rain fireworks bubbles,n:1~12,text?≤6}
-item{art:道具名(内置库或自己 sprite 的 name) 或 emoji:单个emoji,at:left|right|center|near|far|cursor|random 或 x,y(0~1 屏幕比例,可悬在半空),scale?0.5~6(默认1),anim?bob|float|spin|swing|pulse|blink|drift,layer?back,flip?,key?≤8字母} 放道具(同屏最多 6 个);{"t":"item","remove":true 或 key} 拿走
+item{art:道具名(内置库 / 自己 sprite 的 name / 常见英文名如 bicycle guitar) 或 emoji:单个emoji(会自动变成像素风),px?:8~32(emoji 的像素格数,默认16,细节多的写 20~24),recolor?:{原色字母:新颜色}(给内置道具换色,如蓝气球 {"R":"blue"}),at:left|right|center|near|far|cursor|random 或 x,y(0~1 屏幕比例,可悬在半空),scale?0.5~6(默认1),anim?bob|float|spin|swing|pulse|blink|drift,layer?back,flip?,key?≤8字母} 放道具(同屏最多 10 个);{"t":"item","remove":true 或 key} 拿走
   内置像素道具库(优先用,不用自己画):${Props.names.join(' ')}
-sprite{name≤8字母,rows:[字符画,每行≤24字符,最多24行],frames?:[rows,rows…](≤4 帧动画),fps?,pal?:{字符:"#rrggbb"},anchor?:b|c} 自己设计一个新道具/角色(一个字符=一个像素,.=透明;不写 pal 时直接用默认调色板:R红 r暗红 O橙 o暗橙 Y黄 y暗黄 G绿 g暗绿 B蓝 b暗蓝 P紫 p暗紫 N棕 n暗棕 S灰 s暗灰 W白 w浅灰 K黑 C青 c浅青 M粉 L米 T褐;一出戏最多 8 个 sprite,放在用到它的 item 之前)
+sprite{name≤8字母, 四种画法选一种(越靠前越稳越好看):
+  ①emoji:"🐲",px? 用某个 emoji 当底图,自动像素化
+  ②base:内置道具名,recolor:{字母:颜色} 内置道具换色
+  ③shapes:[几何形状…],w,h(画布 4~32 格,默认 16),mirror?:true(只画左半边,自动左右对称) 用形状拼,程序自动栅格化并加明暗
+     坐标从画布左上角(0,0)起,x 向右 y 向下,单位=像素格,后画的盖住先画的:{k:"rect",x,y,w,h,c} {k:"circle",x,y,r,c}(x,y 是圆心) {k:"ellipse",x,y,rx,ry,c} {k:"tri"或"poly",pts:[[x,y],…],c} {k:"line",x1,y1,x2,y2,t:粗细,c};c=颜色字母/#rrggbb/颜色名,c:"." 表示挖掉
+     例(灯塔):{"t":"sprite","name":"tower","w":12,"h":20,"mirror":true,"shapes":[{"k":"tri","pts":[[2,5],[10,5],[6,0]],"c":"R"},{"k":"rect","x":3,"y":5,"w":6,"h":3,"c":"Y"},{"k":"rect","x":3,"y":8,"w":6,"h":11,"c":"W"},{"k":"rect","x":3,"y":11,"w":6,"h":2,"c":"R"},{"k":"rect","x":3,"y":16,"w":6,"h":2,"c":"R"},{"k":"rect","x":1,"y":19,"w":10,"h":1,"c":"S"}]}
+  ④rows:[字符画…](每行≤32 字符,一个字符一个像素,.=透明),frames?:[rows,rows…](≤4 帧动画),fps? 最容易画歪,尽量别用
+  通用可选:pal?:{字母:"#rrggbb"},shade?:false(关掉自动明暗),outline?:true(描深色边,在花哨的桌面上更显眼),anchor?:b|c
+  默认调色板字母:R红 r暗红 O橙 o暗橙 Y黄 y暗黄 G绿 g暗绿 B蓝 b暗蓝 P紫 p暗紫 N棕 n暗棕 S灰 s暗灰 W白 w浅灰 K黑 C青 c浅青 M粉 L米 T褐;一出戏最多 12 个 sprite,放在用到它的 item 之前
 take{key?,at:head|hand|hands|back|front|under,dx?,dy?,rot?,line?,sink?,layer?} 把道具挂到身上,会跟着姿态、翻滚一起动:hand=前手拿着 hands=双手举过头顶 head=顶在头上 back=背着 front=抱在身前 under=骑着/站在上面(扫帚 滑板 魔毯 云 船 火箭…;sink 0~1 身体陷进去多深,0=站在上面,0.5=骑着/坐在船里,1=只露出脑袋)。dx,dy=偏移(像素格,宠物约 14 格宽,dx 朝面向的方向,dy 负=往上),line:true=从手牵一根线过去(气球、风筝;dy 越负飞得越高)
 put 放下(在空中放手道具会掉下去)
 platform{key,x1,x2(0~1),y(0.15~0.9 屏幕高度比例),style:rope|plank|cloud|ledge|ice|beam} 在屏幕上凭空造一个能站的平台(钢丝/木板/云…,最多 6 个);{"t":"platform","remove":true 或 key} 拆掉(站在上面的会掉下来)
@@ -58,7 +66,7 @@ end{text?}
 - 真正互动:至少 3 处让用户参与(ask / wait_for / ask_text / 追鼠标),用户的选择会改变后面发生的事:用 set 记分/好感度/线索,用 if 判定结局;用户打的字要在后面被引用。
 - 结构:story 建议 25~80 个节点,至少 2 个分支和 2 个不同结局;每条路径都必须走到 end 或 continue;id 全局唯一。想写长故事就多用 continue 分段。
 - 善用场景:tint 营造氛围,item+take 做寻宝/送礼/收集,move up/down/window 在窗口间上蹿下跳,move cursor 追着用户的鼠标玩,wear 换装扮演角色。
-- 道具要有画面感:优先用内置像素道具库(别只用 emoji);库里没有的就用 sprite 自己画(8~16 格见方足够,先 sprite 再 item)。想在空中放东西,用 item 的 x,y。
+- 道具要有画面感,按这个顺序找:①内置像素道具库 ②emoji(item 直接写 emoji,几乎什么都有:🚲🎸🦖🍕🚂🏰🌋🤖👻…,自动变成像素风)③sprite 用 shapes 拼 ④字符画。别用 emoji 当道具以外的装饰文字。想在空中放东西,用 item 的 x,y。
 【怎么演出任何动作】没有现成的动作也要演出来:先想清楚画面,再拆成积木组合——
   ①场景:能站的地方(platform / shape solid)、线和面(shape)、道具(item)
   ②运动:谁、从哪到哪、走什么轨迹(motion path/orbit + pace hop sway spin tilt);真实物理用 jump / fall / then:"fall"
