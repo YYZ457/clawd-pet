@@ -65,6 +65,8 @@ const Rig = (() => {
 
     ctx.translate(0, -Math.round(p.lift * u));
     ctx.scale(face * p.sx, p.sy);
+    const selfRot = SKIN === 'whale' && (p.view || 'side') === 'side';
+    if (selfRot) p = Object.assign({}, p, { pitch: (p.pitch || 0) + p.rot * face, rot: 0 });
     ctx.translate(rx(p.pivot[0]), rx(p.pivot[1]));
     ctx.rotate(p.rot * face);
     ctx.translate(-rx(p.pivot[0]), -rx(p.pivot[1]));
@@ -255,122 +257,197 @@ const Rig = (() => {
   }
 
 
-  // ---------------- 大肥鱼(蓝色胖鲸鱼,参考 DeepSeek 图标):和 Clawd 共用同一套 pose ----------------
-  // 侧面像,前方 = +x。整只鲸鱼是一张 22x16 的像素图(由图标缩小后手工修整):
-  //   # 身体  w 白色月牙(嘴/肚皮)  e 眼白  p 瞳孔  t 尾巴(会摆)
-  // 没有腿:legs 状态改成 蹦跶 / 压扁 / 拉长 / 甩尾;armL/armR 画成胸鳍(平时收着,动起来才露出来)。
-  const WHALE = [
-    '......t...............',
-    '.....tt....######.....',
-    'ttt.ttt...##########..',
-    'ttttttt..############.',
-    '.ttttt..#############.',
-    '...tt..###############',
-    '...#######eee#####wwww',
-    '....######epp####wwww#',
-    '....######epp###wwwww#',
-    '....############wwwww#',
-    '.....#########wwwwww#.',
-    '.....########wwwwwww#.',
-    '......######ww##wwww..',
-    '.....######ww##wwww#..',
-    '.....##############...',
-    '..........#######.....'
-  ];
-  const WX = -12, WROWS = WHALE.length;           // 第 c 列 → x = c + WX;最后一行 → y = -1
+  // ---------------- 大肥鱼(蓝色胖鲸鱼,参考 DeepSeek 图标) ----------------
+  // 程序化"骨架":一根可弯曲的脊柱 + 沿脊柱的粗细,所以能 游(身体波动)/卷尾/翻肚皮/拉长压扁;
+  // 另有 正面 / 背面 两种视角(转身、说话、撒娇时用)。
+  // 专属 pose 字段(都可省略,省略时从 Clawd 的通用字段推出来):
+  //   view 'side'|'front'|'back'   bend 尾巴上卷(-1..1.2)   swimA/swimT 游动波幅/相位
+  //   roll 0..1(≥0.5 翻肚皮)       tailW 尾巴额外摆动        puff 鼓起来(0..1)   spout 喷水
+  const WL = 20, WN = 44;                          // 脊柱长度(格) / 采样点数
+  const wRad = s => s < 0.3 ? 6.4 * Math.sqrt(Math.max(0, 1 - Math.pow((0.3 - s) / 0.3, 2))) + 0.25
+    : 1.3 + 5.1 * Math.pow(1 - (s - 0.3) / 0.7, 1.35);
+  function wDerive(p) {
+    // 把 Clawd 的通用 pose 翻译成鱼的身体语言
+    const m = p.legs, T = p.legT || 0, o = { view: p.view || 'side', pitch: 0, bend: 0.75, swimA: 0, swimT: (p.t || 0) * 2.2, roll: p.roll || 0, tailW: 0, puff: p.puff || 0, hover: 0 };
+    if (m === 'walk' || m === 'run') { o.swimA = m === 'run' ? 1 : 0.65; o.swimT = T * 1.6; o.bend = 0.25; o.hover = m === 'run' ? 3 : 2; }
+    else if (m === 'tuck') { o.bend = 0.95; }
+    else if (m === 'air') { o.bend = 0.3 - (p.legLift || 0) * 0.5; o.swimA = 0.35; o.swimT = (p.t || 0) * 9; }
+    else if (m === 'dangle') { o.bend = Math.sin(T) * 0.5; o.swimA = 0.5; o.swimT = T * 2; }
+    else if (m === 'edge') { o.bend = -0.85 + Math.sin(T * 0.6) * 0.12; }
+    else o.tailW = Math.sin((p.t || 0) * 2.1) * 0.12;
+    o.pitch = p.pitch || 0;
+    if (p.bend != null) o.bend = p.bend;
+    if (p.swimA != null) o.swimA = p.swimA;
+    if (p.swimT != null) o.swimT = p.swimT;
+    if (p.tailW != null) o.tailW += p.tailW;
+    if (p.hover != null) o.hover = p.hover;
+    return o;
+  }
+  // 脊柱:锚点在 s=0.3(头和身体交界)
+  function wSpine(o, ax, ay) {
+    const pts = new Array(WN + 1), ds = WL / WN, i0 = Math.round(0.3 * WN);
+    if (o.pitch) { const c = Math.cos(o.pitch), sn = Math.sin(o.pitch), px = 0, py = -6, X = ax - px, Y = ay - py; ax = px + X * c - Y * sn; ay = py + X * sn + Y * c; }
+    const ang = s => {
+      let a = Math.PI + o.pitch;                               // 从头指向尾 = 朝 -x
+      if (s > 0.3) { const u = (s - 0.3) / 0.7; a += o.bend * 2.0 * u * u + o.tailW * u; a += o.swimA * 0.55 * Math.sin(o.swimT - u * 5.2) * u; }
+      else a += o.swimA * 0.08 * Math.sin(o.swimT + 1.2);
+      return a;
+    };
+    pts[i0] = [ax, ay, ang(0.3)];
+    for (let i = i0 + 1; i <= WN; i++) { const a = ang(i / WN), q = pts[i - 1]; pts[i] = [q[0] + Math.cos(a) * ds, q[1] + Math.sin(a) * ds, a]; }
+    for (let i = i0 - 1; i >= 0; i--) { const a = ang(i / WN), q = pts[i + 1]; pts[i] = [q[0] - Math.cos(a) * ds, q[1] - Math.sin(a) * ds, a]; }
+    return pts;
+  }
   function drawWhale(R, p) {
-    const m = p.legs, T = p.legT, E = PAL.eye, WH = PAL.white;
-    let hop = 0, wag = Math.sin(p.t * 2.2) * 0.8, squash = 0;
-    if (m === 'walk' || m === 'run') { hop = Math.abs(Math.sin(T)) * (m === 'run' ? 2.2 : 1.2); wag = Math.sin(T) * 1.4; }
-    else if (m === 'air') wag = Math.max(-1.5, Math.min(1.5, (p.legLift || 0) * 1.5));
-    else if (m === 'dangle') wag = Math.sin(T) * 1.6;
-    else if (m === 'edge') wag = Math.sin(T * 0.6);
-    if (m === 'tuck') squash = 2; else if (m === 'edge') squash = 1;
-    squash += Math.round(p.dy || 0);                 // dy>0 压扁, dy<0 拉长
-    squash = Math.max(-2, Math.min(3, squash));
-    const air = m === 'air' || m === 'dangle';
-    const base = -Math.round(hop) + (air ? -2 : 0);  // 整体底部
-    // 行映射:压扁时去掉中间几行,拉长时重复中间一行
-    const rows = [];
-    for (let r = 0; r < WROWS; r++) {
-      if (squash > 0 && r >= 9 && r < 9 + squash) continue;
-      rows.push(r); if (squash < 0 && r === 9) for (let k = 0; k < -squash; k++) rows.push(r);
-    }
-    const n = rows.length, Y = i => base - (n - i);   // 第 i 个输出行的 y
-    const rowY = {}; rows.forEach((r, i) => { if (rowY[r] == null) rowY[r] = Y(i); });
-    const top = Y(1), B = rowY[8] + 5;              // B:和 Clawd 一样的"脸基线",眼睛在 B-6..B-3 附近
-
+    const o = wDerive(p);
     if (p.prop === 'balloon') {
-      const sway = Math.sin(p.t * 2) * 1.2;
+      const sway = Math.sin(p.t * 2) * 1.2, B = -3;
       R(10, B - 26, 1, 22, '#e8e2dc'); R(6 + sway, B - 36, 9, 10, PAL.red); R(5 + sway, B - 34, 11, 6, PAL.red);
       R(8 + sway, B - 34, 2, 2, '#ff9d97'); R(9.5 + sway, B - 26, 2, 1, '#a82b27');
     }
-    const w = Math.round(wag), LC = SHINY ? PAL.belly : WH;
-    const eyeOpen = (p.eye === 'open' || p.eye === 'wide' || p.eye === 'angry' || p.eye === 'sad') && p.blink < 0.6;
-    for (let i = 0; i < n; i++) {
-      const line = WHALE[rows[i]], y = Y(i);
-      for (let c = 0; c < line.length; c++) {
-        const ch = line[c]; if (ch === '.') continue;
-        const x = c + WX;
-        if (ch === 't') { R(x, y + (c < 4 ? w : (c < 6 ? Math.round(w / 2) : 0)), 1, 1, PAL.body); continue; }
-        let col = PAL.body;
-        if (ch === 'w') col = LC;
-        else if ((ch === 'e' || ch === 'p') && eyeOpen) col = ch === 'p' ? E : WH;
-        R(x, y, 1, 1, col);
+    if (o.view === 'front' || o.view === 'back') return drawWhaleFront(R, p, o);
+    return drawWhaleSide(R, p, o);
+  }
+  function drawWhaleSide(R, p, o) {
+    const E = PAL.eye, WH = PAL.white, LC = SHINY ? PAL.belly : WH;
+    const up = o.roll >= 0.5 ? -1 : 1;              // 翻肚皮:背腹对调
+    const puff = 1 + o.puff * 0.25;
+    const ay = -6.6 * puff - o.hover + (p.dy || 0) * 0.6, pts = wSpine(o, 2, ay);
+    const rad = pts.map((q, i) => wRad(i / WN) * puff);
+    // 尾鳍:两片,从尾巴末端沿 ±角度伸出
+    const tail = pts[WN], ta = tail[2], fl = [];
+    const lobe = (da, len) => { for (let k = 1; k <= 8; k++) { const u = k / 8; fl.push([tail[0] + Math.cos(ta + da) * len * u, tail[1] + Math.sin(ta + da) * len * u, 1.75 - u * 0.9]); } };
+    lobe(-1.0 * up, 5.6); lobe(0.95 * up, 4.6);
+    // 包围盒
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    pts.forEach((q, i) => { x0 = Math.min(x0, q[0] - rad[i]); x1 = Math.max(x1, q[0] + rad[i]); y0 = Math.min(y0, q[1] - rad[i]); y1 = Math.max(y1, q[1] + rad[i]); });
+    fl.forEach(q => { x0 = Math.min(x0, q[0] - 2); x1 = Math.max(x1, q[0] + 2); y0 = Math.min(y0, q[1] - 2); y1 = Math.max(y1, q[1] + 2); });
+    x0 = Math.floor(x0); y0 = Math.floor(y0);
+    // 头部坐标系:fx 朝前,fy 朝肚子(翻肚皮时朝背)
+    const h0 = pts[Math.round(0.3 * WN)], ha = h0[2], fwd = [-Math.cos(ha), -Math.sin(ha)], dn = [Math.sin(ha) * up, -Math.cos(ha) * up];
+    const hf = (fx, fy) => [h0[0] + fwd[0] * fx + dn[0] * fy, h0[1] + fwd[1] * fx + dn[1] * fy];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const cx = x + 0.5, cy = y + 0.5;
+      let best = 1e9, inner = 1e9;
+      for (let i = 0; i <= WN; i++) { const q = pts[i], d = Math.hypot(cx - q[0], cy - q[1]); if (d - rad[i] < best) best = d - rad[i]; if (d - rad[i] + 1.3 < inner) inner = d - rad[i] + 1.3; }
+      let insideB = best < 0, fin = false;
+      if (!insideB) for (const f of fl) if (Math.hypot(cx - f[0], cy - f[1]) < f[2]) { insideB = true; fin = true; break; }
+      if (!insideB) continue;
+      let col = PAL.body;
+      if (!fin && inner < 0) {
+        // 白色月牙:嘴角在正前方偏下,往后变细并向上收
+        const X = cx - h0[0], Y = cy - h0[1], fx = (X * fwd[0] + Y * fwd[1]) / puff, fy = (X * dn[0] + Y * dn[1]) / puff;
+        const yU = fx > 0 ? 0.7 + fx * 0.05 : 0.7 + fx * 0.32;
+        if (fx > -7.5 && fy > yU && fy < 1.2 + (fx + 7.5) * 0.9) col = LC;
       }
+      R(x, y, 1, 1, col);
     }
-    // 眼睛:睁眼时用像素图里的白眼珠 + 瞳孔(随视线挪 1 格);其他表情借用 Clawd 的单只眼画法
-    const ex = Math.max(-1, Math.min(1, Math.round(p.ex))), ey = Math.max(-1, Math.min(1, Math.round(p.ey)));
-    const eyX = -2, eyY = rowY[6];
-    if (eyeOpen) {
-      R(eyX, eyY, 3, 3, WH);
-      R(eyX + 1 + Math.min(0, ex), eyY + 1 + Math.min(0, ey), 2, 2, E);
-      if (p.eye === 'wide') R(eyX - 1, eyY - 1, 3, 1, WH);
-      if (p.eye === 'angry') { R(eyX - 2, eyY - 2, 2, 1, E); R(eyX, eyY - 1, 2, 1, E); }
-      if (p.eye === 'sad') { R(eyX - 2, eyY - 1, 2, 1, E); R(eyX, eyY - 2, 2, 1, E); }
+    // 特征点:沿脊柱 s、法向 nn(相对半径)
+    const at = (s, nn) => { const i = Math.round(s * WN), q = pts[i], r = rad[i]; return [q[0] - Math.sin(q[2]) * nn * r * up, q[1] + Math.cos(q[2]) * nn * r * up]; };
+    // 胸鳍(= 手臂):近侧一片;armR 抬起时鳍往上翻
+    const aR = p.armR || [0, 0, 3], aL = p.armL || [0, 0, 3];
+    const finD = a => (a[1] < -2 ? -4.14 : a[1] < 0 ? -1.94 : -1.04) - (a[0] || 0) * 0.2;
+    const drawFin = (base, d, len, col) => { const ang = ha + d * up; for (let k = 0; k <= 6; k++) { const u = k / 6, x = base[0] + Math.cos(ang) * len * u, y = base[1] + Math.sin(ang) * len * u; R(Math.round(x - 0.5), Math.round(y - 0.5), u < 0.75 ? 2 : 1, u < 0.75 ? 2 : 1, col); } };
+    if (aL[1] < -2) drawFin(hf(-1.5, 1.5), finD(aL) + 0.3, 4.2, PAL.dark);   // 远侧的鳍举起来时才看得到
+    drawFin(aR[1] < -2 ? hf(0, 0.6) : hf(-0.5, 3.2), finD(aR), 3.6 + (aR[2] - 3) * 0.6, PAL.dark);
+    // 眼睛
+    const [exx, eyy] = hf(0.6, -2.2), ex0 = Math.round(exx) - 1, ey0 = Math.round(eyy) - 1, e = p.eye;
+    const ex = Math.max(-1, Math.min(1, Math.round(p.ex || 0))), ey = Math.max(-1, Math.min(1, Math.round(p.ey || 0)));
+    const open = (e === 'open' || e === 'wide' || e === 'angry' || e === 'sad') && (p.blink || 0) < 0.6;
+    if (open) {
+      R(ex0, ey0, 3, 3, WH); if (e === 'wide') R(ex0, ey0 - 1, 3, 1, WH);
+      R(ex0 + 1 + Math.min(0, ex), ey0 + 1 + Math.min(0, ey), 2, 2, E);
+      if (e === 'angry') { R(ex0 - 1, ey0 - 2, 2, 1, E); R(ex0 + 1, ey0 - 1, 2, 1, E); }
+      if (e === 'sad') { R(ex0 - 1, ey0 - 1, 2, 1, E); R(ex0 + 1, ey0 - 2, 2, 1, E); }
     } else {
-      const pe = Object.assign({}, p, { ex: 0, ey: 0 });
-      if (pe.eye === 'open' || pe.eye === 'wide' || pe.eye === 'angry' || pe.eye === 'sad') pe.eye = 'closed';
-      // Clawd 的右眼画在 x≥0、y≈B-6..B-3;平移到大肥鱼的眼睛位置
-      const dx = eyX - 3, dy = (eyY + 3) - (B - 3);
-      drawEyes((x, y, ww, hh, c) => { if (x >= 0) R(x + dx, y + dy, ww, hh, c); }, pe, B);
+      const pe = Object.assign({}, p, { ex: 0, ey: 0 }); if (open === false && (e === 'open' || e === 'wide' || e === 'angry' || e === 'sad')) pe.eye = 'closed';
+      drawEyes((x, y, w, h, c) => { if (x >= 0) R(x - 2 + ex0, y + 9 + ey0, w, h, c); }, pe, -3);
     }
-    if (p.blush > 0.02) { R.ga && R.ga(p.blush); R(eyX - 1, eyY + 4, 2, 1, PAL.blush); R.ga && R.ga(1); }
-    if (p.glasses === 'shades') { R(eyX - 2, eyY, 5, 3, '#15151a'); R(eyX + 3, eyY, 5, 1, '#15151a'); R(eyX - 1, eyY, 1, 1, '#6d6d7a'); }
-    if (p.tears) { const o = Math.floor((p.t * 7) % 4); R(eyX, eyY + 3 + o, 1, 2, PAL.tear); }
-    // 嘴:白色月牙本身就是笑着的嘴;其他嘴型画在最前端的嘴角上(小小的,不抢眼睛)
-    const mo = p.mouth, mx = 8, my = rowY[6];
+    if (p.blush > 0.02) { R.ga && R.ga(p.blush); R(ex0 + 2, ey0 + 3, 2, 1, PAL.blush); R.ga && R.ga(1); }
+    if (p.glasses === 'shades') { R(ex0 - 1, ey0, 5, 3, '#15151a'); R(ex0 + 4, ey0, 4, 1, '#15151a'); }
+    if (p.tears) { const k = Math.floor((p.t * 7) % 4); R(ex0 + 1, ey0 + 3 + k, 1, 2, PAL.tear); }
+    // 嘴(画在最前端)
+    const [mxx, myy] = hf(6.6, 0.7), mx = Math.round(mxx) - 1, my = Math.round(myy), mo = p.mouth;
     if (mo === 'o') R(mx, my, 2, 2, E);
-    else if (mo === 'big') { R(mx - 1, my, 3, 2, E); R(mx, my + 2, 2, 1, '#e8647a'); }
-    else if (mo === 'yawn') { R(mx - 1, my, 3, 3, E); R(mx, my + 2, 2, 1, '#e8647a'); }
-    else if (mo === 'frown') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 1, my + 1, 2, 1, E); R(mx - 2, my + 2, 1, 1, E); }
-    else if (mo === 'flat') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 2, my + 1, 4, 1, E); }
+    else if (mo === 'big') { R(mx - 1, my, 3, 2, E); R(mx, my + 1, 2, 1, '#e8647a'); }
+    else if (mo === 'yawn') { R(mx - 1, my - 1, 3, 3, E); R(mx, my + 1, 2, 1, '#e8647a'); }
+    else if (mo === 'frown') { R(mx - 1, my, 2, 1, E); R(mx - 2, my + 1, 1, 1, E); }
+    else if (mo === 'flat') R(mx - 2, my, 3, 1, E);
     else if (mo === 'munch') R(mx, my, 2, Math.sin(p.t * 16) > 0 ? 2 : 1, E);
-    else if (mo === 'cat') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 2, my + 1, 1, 1, E); R(mx - 1, my + 2, 1, 1, E); R(mx, my + 1, 1, 1, E); R(mx + 1, my + 2, 1, 1, E); }
-    // 喷水(头顶的气孔)
-    const spout = p.spout || (p.mouth === 'big' && p.eye === 'happy') || (m === 'stand' && (p.t % 13) < 1.1 && !p.hat);
-    if (spout) {
-      const k = Math.floor(p.t * 8) % 2, W = '#8fd3ff', W2 = '#e6f7ff', sx = 1;
-      R(sx, top - 2, 1, 2, W); R(sx, top - 4, 1, 2, W2);
-      R(sx - 1 - k, top - 5, 1, 1, W); R(sx + 1 + k, top - 5, 1, 1, W); R(sx - 2 - k, top - 4, 1, 1, W2); R(sx + 2 + k, top - 4, 1, 1, W2);
+    else if (mo === 'cat') { R(mx - 2, my, 1, 1, E); R(mx - 1, my + 1, 1, 1, E); R(mx, my, 1, 1, E); }
+    // 喷水(头顶气孔)
+    const [sx0, sy0] = hf(0.5, -6.4);
+    wSpout(R, p, o, Math.round(sx0), Math.round(sy0) - (up < 0 ? -4 : 0));
+    // 手里的东西 / 帽子 / 晕
+    const [hx, hy] = at(0.36, -0.4);
+    drawProp((x, y, w, h, c) => R(x + Math.round(hx) - 2, y + Math.round(hy) + 2, w, h, c), p, -3);
+    const [tx, ty] = hf(1.2, -6.2);
+    if (up > 0) drawHat((x, y, w, h, c) => R(x + Math.round(tx), y, w, h, c), p, Math.round(ty) + 1);
+    if (p.dizzy) wDizzy(R, p, Math.round(tx), Math.round(ty) - 3);
+  }
+  function wSpout(R, p, o, sx, sy) {
+    const m = p.legs;
+    const on = p.spout || (p.mouth === 'big' && p.eye === 'happy') || (m === 'stand' && ((p.t || 0) % 13) < 1.1 && !p.hat && !o.swimA);
+    if (!on) return;
+    const k = Math.floor((p.t || 0) * 8) % 2, W = '#8fd3ff', W2 = '#e6f7ff';
+    R(sx, sy - 2, 1, 2, W); R(sx, sy - 4, 1, 2, W2);
+    R(sx - 1 - k, sy - 5, 1, 1, W); R(sx + 1 + k, sy - 5, 1, 1, W); R(sx - 2 - k, sy - 4, 1, 1, W2); R(sx + 2 + k, sy - 4, 1, 1, W2);
+  }
+  function wDizzy(R, p, cx, cy) {
+    for (let i = 0; i < 3; i++) {
+      const a = p.t * 6 + i * 2.1, sx = cx + Math.cos(a) * 8, sy = cy + Math.sin(a) * 1.8;
+      R(sx - 1, sy, 3, 1, PAL.gold); R(sx, sy - 1, 1, 3, PAL.gold);
     }
-    // 胸鳍(= 手臂):平时收在身体里,动起来才露出来
-    const fin = (x, a, side) => {
-      if (!a[0] && !a[1] && a[2] === 3) return;
-      const y = B - 5 + a[1], up = a[1] < -2;
-      R(x, y, 2, a[2], PAL.dark);
-      R(x + (side > 0 ? 2 : -1), up ? y : y + a[2] - 1, 1, 1, PAL.dark);
+  }
+  // 正面 / 背面:圆圆的身体,尾巴从头顶后面翘出来
+  function drawWhaleFront(R, p, o) {
+    const back = o.view === 'back', E = PAL.eye, WH = PAL.white, LC = SHINY ? PAL.belly : WH;
+    const puff = 1 + o.puff * 0.25, rx = 7.6 * puff, ry = 7.0 * puff;
+    const cy = -ry - o.hover + Math.max(0, (p.dy || 0)) * 0.5, sq = p.legs === 'tuck' ? 0.88 : 1;
+    // 尾巴(从身体后面往上翘,左右摆)
+    const wag = Math.sin(o.swimT) * (0.3 + o.swimA * 0.6) + o.tailW * 2;
+    const tb = [0, cy - ry * 0.4], tt = [Math.sin(wag) * 3, cy - ry - 4.5 + Math.abs(Math.sin(wag))];
+    const tailCells = () => {
+      for (let k = 0; k <= 10; k++) { const u = k / 10; R(Math.round(tb[0] + (tt[0] - tb[0]) * u - 1), Math.round(tb[1] + (tt[1] - tb[1]) * u), 2, 1, PAL.body); }
+      for (const sd of [-1, 1]) for (let k = 0; k <= 5; k++) R(Math.round(tt[0] + sd * k * 0.95 - 0.5), Math.round(tt[1] - k * 0.55 + (k > 3 ? 0.4 : 0)), 1, sd > 0 ? 2 : 2, PAL.body);
     };
-    fin(-9 - p.armL[0], p.armL, -1);
-    fin(9 + p.armR[0], p.armR, 1);
-    drawProp(R, p, B);
-    drawHat((x, y, ww, hh, c) => R(x + 2, y, ww, hh, c), p, top + 1);
-    if (p.dizzy) {
-      for (let i = 0; i < 3; i++) {
-        const a = p.t * 6 + i * 2.1, sx = 2 + Math.cos(a) * 8, sy = top - 3 + Math.sin(a) * 1.8;
-        R(sx - 1, sy, 3, 1, PAL.gold); R(sx, sy - 1, 1, 3, PAL.gold);
-      }
+    if (!back) tailCells();
+    for (let y = Math.floor(cy - ry * sq); y <= Math.ceil(cy + ry * sq); y++) for (let x = Math.floor(-rx); x <= Math.ceil(rx); x++) {
+      const X = (x + 0.5) / rx, Y = (y + 0.5 - cy) / (ry * sq), d = X * X + Y * Y;
+      if (d > 1) continue;
+      let col = PAL.body;
+      if (!back && Y > 0.08 + 0.55 * X * X && d < 0.78) col = LC;      // 白色笑脸月牙
+      R(x, y, 1, 1, col);
     }
+    if (back) tailCells();
+    const B = Math.round(cy + 3.5);
+    // 胸鳍 = 手臂(和 Clawd 一样的位置语义)
+    const aL = p.armL || [0, 0, 3], aR = p.armR || [0, 0, 3];
+    R(-Math.round(rx) - 2 - aL[0], B - 4 + aL[1], 2, aL[2], PAL.dark);
+    R(Math.round(rx) + aR[0], B - 4 + aR[1], 2, aR[2], PAL.dark);
+    if (back) { if (p.dizzy) wDizzy(R, p, 0, Math.round(cy - ry) - 3); drawHat(R, p, Math.round(cy - ry) + 1); return; }
+    // 脸:两只眼睛(白眼珠),表情和 Clawd 完全通用
+    const e = p.eye, open = (e === 'open' || e === 'wide' || e === 'angry' || e === 'sad') && (p.blink || 0) < 0.6;
+    if (open) {
+      const ex = Math.max(-1, Math.min(1, Math.round(p.ex || 0))), ey = Math.max(-1, Math.min(1, Math.round(p.ey || 0)));
+      for (const x0 of [-5, 2]) {
+        R(x0, B - 6, 3, 3, WH); if (e === 'wide') R(x0, B - 7, 3, 1, WH);
+        R(x0 + 1 + Math.min(0, ex), B - 5 + Math.min(0, ey), 2, 2, E);
+      }
+      if (e === 'angry') { R(-6, B - 8, 2, 1, E); R(-4, B - 7, 2, 1, E); R(4, B - 8, 2, 1, E); R(2, B - 7, 2, 1, E); }
+      if (e === 'sad') { R(-6, B - 7, 2, 1, E); R(-4, B - 8, 2, 1, E); R(4, B - 7, 2, 1, E); R(2, B - 8, 2, 1, E); }
+    } else {
+      const pe = Object.assign({}, p); if (e === 'open' || e === 'wide' || e === 'angry' || e === 'sad') pe.eye = 'closed';
+      drawEyes(R, pe, B);
+    }
+    if (p.blush > 0.02) { R.ga && R.ga(p.blush); R(-7, B - 3, 2, 1, PAL.blush); R(5, B - 3, 2, 1, PAL.blush); R.ga && R.ga(1); }
+    if (p.glasses === 'shades') { R(-6, B - 7, 5, 3, '#15151a'); R(1, B - 7, 5, 3, '#15151a'); R(-1, B - 7, 2, 1, '#15151a'); }
+    if (p.tears) { const k = Math.floor((p.t * 7) % 4); R(-4, B - 3 + k, 1, 2, PAL.tear); R(3, B - 3 + ((k + 2) % 4), 1, 2, PAL.tear); }
+    drawMouth(R, p, B + 1);
+    wSpout(R, p, o, 0, Math.round(cy - ry));
+    drawProp(R, p, B);
+    drawHat(R, p, Math.round(cy - ry) + 1);
+    if (p.dizzy) wDizzy(R, p, 0, Math.round(cy - ry) - 3);
   }
 
   // ---------------- 粒子 ----------------
@@ -405,6 +482,14 @@ const Rig = (() => {
         break;
       }
       case 'steam': ctx.globalAlpha *= 0.55; R(0, 0, 1, 3, '#fff'); break;
+      case 'bubble': {                                  // 空心小泡泡(鱼吐的)
+        const r = Math.max(2, Math.round((q.size || 1) * u * 1.3));
+        ctx.globalAlpha *= 0.85; ctx.strokeStyle = '#bfe6ff'; ctx.lineWidth = Math.max(1, Math.round(u * 0.45));
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fillRect(x - Math.round(r * 0.5), y - Math.round(r * 0.6), Math.max(1, Math.round(u * 0.5)), Math.max(1, Math.round(u * 0.5)));
+        break;
+      }
+      case 'drop': R(0, 0, 1, 1, q.color || '#8fd3ff'); R(0, 1, 1, 1, '#e6f7ff'); break;
     }
     ctx.globalAlpha = 1;
   }
@@ -435,6 +520,15 @@ const Rig = (() => {
     ctx.fillStyle = 'rgba(0,0,0,.14)'; ctx.beginPath(); ctx.ellipse(x, y, r * 0.9, r * 0.28, 0, 0, Math.PI * 2); ctx.fill();
   }
 
-  return { newPose, drawPet, drawParticle, drawBall, drawCritter, setPalette, setSkin, skin: () => SKIN, PAL };
+    /** 身体锚点(本地坐标,未翻转):Clawd 返回 null 用默认值 */
+  function anchor(name, p) {
+    if (SKIN !== 'whale') return null;
+    const front = p && (p.view === 'front' || p.view === 'back'), h = -((p && p.hover) || 0);
+    const A = front
+      ? { hand: [9, -6], handL: [-9, -6], hands: [0, -6], head: [0, -15], feet: [0, 0], back: [0, -13], pet: [0, -7] }
+      : { hand: [6, -4], handL: [-2, -5], hands: [5, -5], head: [1, -14], feet: [0, 0], back: [-3, -13], pet: [0, -7] };
+    const a = A[name] || A.pet; return [a[0], a[1] + h];
+  }
+  return { newPose, drawPet, drawParticle, drawBall, drawCritter, setPalette, setSkin, skin: () => SKIN, anchor, PAL };
 })();
 if (typeof module !== 'undefined') module.exports = Rig;

@@ -18,9 +18,10 @@
     legs: ['stand', 'walk', 'run', 'tuck', 'air', 'dangle'],
     prop: ['book', 'mug', 'cookie', 'flower', 'balloon', 'sign', 'heart', 'laptop'],
     hat: ['santa', 'party', 'crown', 'bow', 'nightcap', 'pumpkin', 'redcap'],
-    glasses: ['shades']
+    glasses: ['shades'],
+    view: ['side', 'front', 'back']
   };
-  const NUM = { lift: [0, 12], dy: [-4, 4], sx: [-1.6, 1.6], sy: [0.4, 1.6], rot: [-6.3, 6.3], ex: [-1, 1], ey: [-1, 1], blush: [0, 1], blink: [0, 1], size: [0.3, 3], alpha: [0, 1] };
+  const NUM = { lift: [0, 12], dy: [-4, 4], sx: [-1.6, 1.6], sy: [0.4, 1.6], rot: [-6.3, 6.3], ex: [-1, 1], ey: [-1, 1], blush: [0, 1], blink: [0, 1], size: [0.3, 3], alpha: [0, 1], bend: [-1.2, 1.4], roll: [0, 1], puff: [0, 1], swimA: [0, 1.2], pitch: [-6.3, 6.3] };
   const FX = ['heart', 'star', 'note', 'confetti', 'dust', 'zzz', 'text', 'question', 'exclaim', 'sweat', 'anger', 'sparkle', 'snow', 'rain', 'fireworks', 'bubbles'];
   const WAITS = ['pet', 'click', 'near', 'far', 'throw', 'tickle', 'hover', 'grab', 'still', 'move', 'left', 'right', 'top', 'bottom', 'type'];
   const MOVES = ['left', 'right', 'center', 'cursor', 'item', 'up', 'down', 'window', 'ground', 'plat', 'point'];
@@ -33,7 +34,7 @@
   const FACES = ['auto', 'left', 'right', 'keep'];
   const TRAILS = ['dust', 'smoke', 'fire', 'star', 'sparkle', 'heart', 'note', 'bubbles', 'snow', 'speed'];
   const SHAPES = ['line', 'rect', 'circle', 'arc'];
-  const PET_WORDS = ['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角'];
+  const PET_WORDS = ['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角', '大肥鱼', 'fatfish'];
   const TO_WORDS = ['pet', 'cursor', 'mouse', 'top', 'sky', 'ground', 'bottom', 'left', 'right', 'center', 'up', 'down', 'away', 'offscreen'];
   /** 模型常用别的字段名来指"哪个道具/谁":who / key / item / target / obj */
   const refOf = (...vs) => { for (const v of vs) { if (v == null || typeof v === 'object') continue; const t = String(v).trim().toLowerCase(); if (PET_WORDS.includes(t)) return 'pet'; const k = key(v, 12); if (k) return k; } return ''; };
@@ -115,6 +116,7 @@
     }
     if (o.tears != null) out.tears = !!o.tears;
     if (o.dizzy != null) out.dizzy = !!o.dizzy;
+    if (o.spout != null) out.spout = !!o.spout;
     return out;
   }
 

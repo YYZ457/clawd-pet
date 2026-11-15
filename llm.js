@@ -86,19 +86,32 @@ end{text?}
 - 只输出上面定义的字段。
 示例(片段):{"kind":"story","title":"偷饼干","nodes":[{"id":"a","t":"say","text":"嘘…我要偷饼干","pose":{"eye":"closed","mouth":"cat"}},{"id":"b","t":"move","to":"window"},{"id":"c","t":"ask","text":"饼干在哪?","choices":[{"text":"左边","next":"l","set":{"hint":"1"}},{"text":"右边","next":"r"}]},{"id":"l","t":"item","emoji":"🍪","at":"left","key":"ck"},{"id":"l2","t":"move","to":"item","item":"ck","next":"z"},{"id":"r","t":"say","text":"空的!","pose":{"eye":"sad"},"next":"z"},{"id":"z","t":"end","text":"完"}]}`;
 
-function buildAsk(ctx, text) {
+// 不同形象:换掉开头的人设,再追加这个形象的身体说明
+const WHALE_HEAD = '你是桌面宠物 大肥鱼(蓝色像素胖鲸鱼,长得像 DeepSeek 的小鲸鱼图标:圆滚滚、肚子上一道白色月牙;会游泳、会喷水、爱吐泡泡,慢悠悠、很温柔,爱吃小鱼干)的导演兼编剧。';
+const WHALE_NOTE = `
+【大肥鱼的身体】它是鱼,整块屏幕就是它的海:
+- move/jump 时它会直接游过去(不用一级级跳);motion 可以让它在空中自由游(path/orbit/to 都行),停在半空也很自然,不用 then:"land"。
+- pose 额外字段:view:"side"|"front"|"back"(正面对着用户说话/撒娇,背对着生闷气),roll:1 翻肚皮,bend:-1~1.4(负=尾巴下垂,正=尾巴上卷),puff:1 鼓成一个球,spout:true 头顶喷水,swimA:0~1 摆尾游动幅度,pitch:-1.5~1.5 抬头(负)/低头(正)。
+- legs:"walk"/"run" 会画成摆尾游泳,"tuck" 蜷成一团,"air" 是跃出水面;armL/armR 是两片胸鳍。fx:"bubbles" 是吐泡泡。
+- 适合它的戏:游泳比赛、吐泡泡、喷水花、翻肚皮装睡、追着鼠标游、在窗口上晒太阳、海底探险……`;
+function systemFor(skin) {
+  if (skin !== 'whale') return SYSTEM;
+  return SYSTEM.replace(/^你是桌面宠物 Clawd[^。]*。/, WHALE_HEAD) + WHALE_NOTE;
+}
+
+function buildAsk(ctx, text, skin) {
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: systemFor(skin) },
     { role: 'user', content: `[状态] ${ctx || '无'}\n用户说:${String(text).slice(0, 200)}` }
   ];
 }
 
-function buildContinue(ctx, st) {
+function buildContinue(ctx, st, skin) {
   const maxSeg = st.maxSeg || 8, last = st.seg >= maxSeg;
   const log = (st.log || []).slice(-12).join(';').slice(0, 600);
   const vars = Object.keys(st.vars || {}).slice(0, 8).map(k => k + '=' + st.vars[k]).join(',');
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: systemFor(skin) },
     {
       role: 'user',
       content: `[状态] ${ctx || '无'}\n故事《${String(st.title || '').slice(0, 16)}》,开场:${String(st.premise || '').slice(0, 80)}。` +
@@ -280,4 +293,4 @@ async function chatStream(cfg, messages, opt = {}, onDelta) {
   return { text, finish: finish || (timedOut ? 'timeout' : ''), tokens: (usage && usage.total_tokens) || Math.ceil((JSON.stringify(messages).length + text.length) / 1.5) };
 }
 
-module.exports = { SYSTEM, buildAsk, buildContinue, extractJSON, repairJSON, NodeStream, chat, chatStream, LLMError, isDeepseek, normalizeModel };
+module.exports = { SYSTEM, systemFor, buildAsk, buildContinue, extractJSON, repairJSON, NodeStream, chat, chatStream, LLMError, isDeepseek, normalizeModel };

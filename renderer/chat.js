@@ -7,8 +7,14 @@
   const inp = $('inp'), send = $('send'), status = $('status');
   let busy = false;
 
-  const setStatus = (t, err) => { status.textContent = t || ''; status.className = 'status' + (err ? ' err' : ''); };
+  let NM = 'Clawd';
+  const setStatus = (t, err) => { status.textContent = (t || '').replace(/Clawd/g, NM); status.className = 'status' + (err ? ' err' : ''); };
 
+  if (api && api.getInfo) api.getInfo().then(info => {
+    const nm = info && info.name; if (!nm || nm === 'Clawd') return; NM = nm;
+    document.title = document.title.replace(/Clawd/g, nm);
+    for (const id of ['title', 'status']) { const el = $(id); if (el && el.firstChild && el.firstChild.nodeType === 3) el.firstChild.nodeValue = el.firstChild.nodeValue.replace(/Clawd/g, nm); }
+  }).catch(() => {});
   if (reply) {
     $('title').textContent = 'Clawd 在问你';
     $('q').hidden = false; $('q').textContent = qs.get('q') || '';

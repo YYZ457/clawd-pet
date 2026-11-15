@@ -25,7 +25,13 @@
   let quiet = false;
   const G0 = 2300;
 
+  const isFish = () => !!(window.Rig && Rig.skin && Rig.skin() === 'whale');
+  function applySkin(id) {
+    const was = isFish(); Rig.setSkin(id === 'whale' ? 'whale' : 'clawd');
+    return was !== isFish();
+  }
   function layout(info) {
+    if (info && info.skin) applySkin(info.skin);
     if (info) {
       W = info.width; H = info.height; groundY = Math.min(info.groundY, H - 2);
       S = info.scale || S; quiet = !!info.quiet;
@@ -36,7 +42,7 @@
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     cv.style.width = W + 'px'; cv.style.height = H + 'px';
     u = Math.max(2, Math.round(S * dpr));
-    k = S / 4; petW = 14 * S; petH = 11 * S;
+    k = S / 4; petW = (isFish() ? 20 : 14) * S; petH = (isFish() ? 14 : 11) * S;
     fullClear = true;
     rebuild();
   }
@@ -147,15 +153,17 @@
   }
   function updateHitbox() {
     if (!hitboxEl) return;
-    const hbW = Math.round(20 * S);
-    const hbH = Math.round(16 * S);
+    const f = isFish(), lf = f && P.float ? 3 * S : 0;
+    const hbW = Math.round((f ? 25 : 20) * S);
+    const hbH = Math.round((f ? 19 : 16) * S);
     const hbX = Math.round(P.x - hbW / 2);
-    const hbY = Math.round(P.y - 13.5 * S);
+    const hbY = Math.round(P.y - (f ? 17 : 13.5) * S - lf);
     hitboxEl.style.width = hbW + 'px';
     hitboxEl.style.height = hbH + 'px';
     hitboxEl.style.transform = `translate3d(${hbX}px, ${hbY}px, 0)`;
   }
   function overPet(x, y) {
+    if (isFish()) { const lf = P.float ? 3 * S : 0; return x >= P.x - 12.5 * S && x <= P.x + 12.5 * S && y >= P.y - 17 * S - lf && y <= P.y + (P.mode === 'edge' ? 5 : 2) * S - lf; }
     return x >= P.x - 10 * S && x <= P.x + 10 * S && y >= P.y - 13.5 * S && y <= P.y + (P.mode === 'edge' ? 3.5 : 2) * S;
   }
   function overChips(x, y) { const r = window.Director && Director.chipsRect(); return !!r && x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6; }
@@ -182,6 +190,7 @@
   let bubT = 0, bubDur = 0, storySay = false, bubPos = { x: 0, y: 0, w: 0, h: 0, below: false };
   function say(text, ms = 2400, cls = '', html = false) {
     if (!storySay && window.Director && Director.active()) return;      // 演剧情时,其它气泡先闭嘴
+    if (isFish() && typeof text === 'string') text = text.replace(/Clawd/g, '大肥鱼');
     if (quiet && !cls.includes('force')) return;
     if (html) bub.innerHTML = text; else bub.textContent = text;
     bub.className = 'show ' + cls.replace('force', '');
@@ -230,6 +239,12 @@
 
   function setMode(m, d) {
     if (!B[m]) m = 'idle';
+    if (FISH() && !P.plat && P.float && !FLOAT_OK.has(m) && !FISH_MODES.has(m)) {           // 漂在空中做不了的动作 → 游过去 / 先落下来
+      if (m === 'walk') { const t = (d && d.tx != null) ? { tx: d.tx, ty: P.y } : fishTarget(false); m = 'swim'; d = Object.assign({}, d, t, d && d.sp > 130 * k ? { sp: d.sp } : {}); }
+      else if (m === 'follow' || m === 'pounce') { m = 'chase'; d = {}; }
+      else { m = 'rest'; d = {}; }
+    }
+    if (!FISH()) P.float = false;
     if (P.mode === 'ball' && m !== 'ball') ball.on = false;
     if (P.mode === 'critter' && m !== 'critter') crit.on = false;
     if ((m === 'air' || m === 'grab') && (P.pendX || P.pendY)) { P.x += P.pendX; P.y += P.pendY; P.pendX = P.pendY = 0; }
@@ -248,7 +263,7 @@
     P.vx = vx; P.vy = vy;
   }
   function attach(pl) {
-    P.plat = pl; P.platKey = pl.key; P.y = pl.y; P.vy = 0; P.vx = 0; P.pendX = P.pendY = 0;
+    P.plat = pl; P.platKey = pl.key; P.y = pl.y; P.vy = 0; P.vx = 0; P.pendX = P.pendY = 0; P.float = false;
   }
 
   // ---------------------------------------------------------------- pose helpers
@@ -547,6 +562,7 @@
   B.air = {
     update(dt) {
       const G = G0 * k, d = P.d;
+      if (FISH() && !d.tag) { fishDrift(dt); return; }
       const px = P.x, py = P.y;
       P.vy += G * dt; if (!P.thrown && P.vy > 950 * k) P.vy = 950 * k;
       P.x += P.vx * dt; P.y += P.vy * dt;
@@ -949,7 +965,15 @@
 
   B.story = {
     enter() {},
-    update() {},
+    update(dt) {
+      // 鱼漂在半空时开演:没有移动节点在接管的话,先慢慢沉到下面的平台上(剧情里的很多动作需要脚下有东西)
+      if (FISH() && !P.plat && !P.fly && !NAV.moving) {
+        const pl = platBelow(P.x, P.y - 4); P.float = true;
+        if (!pl) return;
+        fishMove(P.x, pl.y, 160 * k, dt, 3);
+        if (Math.abs(P.y - pl.y) < 6 * k) { P.pitch = 0; P.vx = P.vy = 0; attach(pl); }
+      }
+    },
     pose(p) { base(p); Director.applyPose(p); }
   };
 
@@ -1056,6 +1080,7 @@
   /** 每帧调用一次:朝 (tx,ty) 走/跳。返回 'moving' | 'hopping' | 'arrived' | 'stuck' */
   function navStep(tx, ty, o) {
     o = o || {}; const dt = o.dt || 0.016, run = !!o.run;
+    if (FISH()) return fishNav(tx, ty, o);
     NAV.moving = false;
     if (P.mode !== 'story') return 'hopping';
     const pl = P.plat; if (!pl) return 'hopping';
@@ -1095,8 +1120,8 @@
     return 'arrived';
   }
   function navPick(kind) {
-    const from = P.plat; if (!from) return null;
-    const map = bfs(from, P.x), c = [];
+    const from = P.plat; if (!from && !FISH()) return null;
+    const map = FISH() ? new Map(plats.filter(q => q.x2 - q.x1 > petW * 0.9).map(q => [q, 1])) : bfs(from, P.x), c = [];   // 鱼哪儿都游得到
     for (const [p] of map) {
       if (p === from) continue;
       if (kind === 'up' && !(p.y < P.y - 25 * k)) continue;
@@ -1110,9 +1135,282 @@
     return { x: rnd(p.x1 + m, Math.max(p.x1 + m, p.x2 - m)), y: p.y - 5.5 * S };
   }
 
+  // ================================================================ 大肥鱼:会游泳
+  // 鲸鱼的"家"是整块屏幕:大部分时间在空中游来游去(P.float),偶尔落到窗口/地面上歇一会。
+  // 所有 Clawd 的动作在鱼身上依旧可用(由 rig 翻译成鱼的身体语言),另外加一套鱼专属行为。
+  const FISH = () => !!(Rig.skin && Rig.skin() === 'whale');
+  // 漂在半空时还能做的 Clawd 动作(只改姿势,不依赖脚下的平台)
+  const FLOAT_OK = new Set(['idle', 'wave', 'cheer', 'spin', 'read', 'coffee', 'cookie', 'laptop', 'hiccup', 'sneeze', 'bow', 'stretch', 'petted', 'love', 'poke', 'ouch', 'tickle', 'dizzy', 'party', 'hold', 'startle', 'notice', 'story', 'dance', 'sleep', 'sit', 'grab', 'air', 'crouch', 'land']);
+  const FISH_MODES = new Set(['swim', 'float', 'dash', 'loop', 'barrel', 'bubbles', 'spout', 'chase', 'peek', 'breach', 'rest', 'takeoff']);
+  // 这些模式时转成正面(对着你)
+  const FRONT_MODES = new Set(['wave', 'petted', 'love', 'hold', 'cheer', 'tickle', 'sneeze', 'hiccup', 'stretch', 'party', 'peek', 'poke']);
+  let fishFace = 1, turnT = 0;
+  function fishMove(tx, ty, sp, dt, sharp) {
+    const dx = tx - P.x, dy = ty - P.y, dist = Math.hypot(dx, dy) || 1;
+    const want = Math.min(sp, dist * 2.4), a = 1 - Math.exp(-dt * (sharp || 2.6));
+    P.vx += (dx / dist * want - P.vx) * a; P.vy += (dy / dist * want - P.vy) * a;
+    P.x += P.vx * dt; P.y += P.vy * dt;
+    fishClamp();
+    if (Math.abs(P.vx) > 14 * k) P.face = sign(P.vx);
+    fishStroke(dt);
+    return dist;
+  }
+  function fishStroke(dt) {
+    const spd = Math.hypot(P.vx, P.vy);
+    P.legT += dt * (1.6 + spd / (7 * S));
+    const tgt = clamp(Math.atan2(P.vy, Math.abs(P.vx) + 20 * k), -1.0, 1.0);
+    P.pitch = (P.pitch || 0) + (tgt - (P.pitch || 0)) * Math.min(1, dt * 5);
+  }
+  function fishClamp() {
+    P.x = clamp(P.x, petW * 0.6, W - petW * 0.6);
+    P.y = clamp(P.y, petH + 10 * S, groundY - 2 * S);
+  }
+  function fishFloat() { P.plat = null; P.platKey = null; P.float = true; P.fly = false; }
+  function fishTarget(far) {
+    const dir = chance(0.5) ? 1 : -1, span = (far ? rnd(260, 620) : rnd(120, 380)) * k;
+    let tx = P.x + dir * span; if (tx < petW || tx > W - petW) tx = P.x - dir * span;
+    return { tx: clamp(tx, petW, W - petW), ty: clamp(P.y + rnd(-1, 1) * rnd(40, 200) * k, Math.max(petH + 30 * S, H * 0.16), groundY - 6 * S) };
+  }
+  const mouthPt = () => [P.x + P.face * 9 * S, P.y - 6 * S];
+  function bubble(x, y, n) { for (let i = 0; i < (n || 1); i++) spawn('bubble', x + rnd(-2, 2) * S, y + rnd(-2, 2) * S, { vx: rnd(-8, 8), vy: rnd(-46, -26), life: rnd(1.4, 2.4), size: rnd(0.8, 1.6), wob: rnd(0, 6) }); }
+  function splash(x, y, n) { for (let i = 0; i < n; i++) spawn('drop', x + rnd(-4, 4) * S, y, { vx: rnd(-90, 90), vy: rnd(-220, -90), g: 520, life: rnd(0.5, 0.9), size: rnd(0.9, 1.4) }); }
+
+  // 自由游到某处
+  B.swim = {
+    enter(d) {
+      fishFloat();
+      if (d.tx == null) Object.assign(d, fishTarget(chance(0.4)));
+      d.sp = d.sp || rnd(70, 115) * k; d.limit = d.limit || 14; d.ph = rnd(0, 6); d.bt = rnd(0.5, 2);
+    },
+    update(dt) {
+      const d = P.d;
+      const dist = fishMove(d.tx, d.ty + Math.sin(P.mt * 1.4 + d.ph) * 16 * k, d.sp, dt);
+      d.bt -= dt; if (d.bt <= 0) { d.bt = rnd(1.2, 3.5); const m = mouthPt(); bubble(m[0], m[1], 1 + (chance(0.3) ? 1 : 0)); }
+      if (dist < 14 * k || P.mt > d.limit) {
+        if (P.greet) { P.greet = false; setMode('wave', { greet: true }); return; }
+        if (d.done) d.done(); else setMode('float', { dur: rnd(0.8, 2.2) });
+      }
+    },
+    pose(p) { base(p); p.legs = 'walk'; p.legT = P.legT; p.pitch = P.pitch || 0; if (P.d.sp > 150 * k) { p.legs = 'run'; p.mouth = 'big'; } else if (Math.sin(P.mt * 0.9) > 0.6) p.mouth = 'smile'; }
+  };
+  // 在半空中悬停(鱼版的发呆)
+  B.float = {
+    enter(d) { fishFloat(); d.dur = d.dur || rnd(2.5, 6); d.turned = false; },
+    update(dt) {
+      const d = P.d, a = Math.exp(-dt * 2.5); P.vx *= a; P.vy *= a; P.x += P.vx * dt; P.y += P.vy * dt; fishClamp();
+      P.pitch = (P.pitch || 0) * Math.exp(-dt * 3); P.legT += dt * 1.5;
+      if (!d.turned && P.mt > 1) { d.turned = true; if (chance(0.5)) faceCursor(); }
+      if (P.mt > d.dur) decide();
+    },
+    pose(p) { base(p); p.pitch = P.pitch || 0; }
+  };
+  // 冲刺
+  B.dash = {
+    enter(d) { fishFloat(); Object.assign(d, fishTarget(true)); d.sp = rnd(240, 320) * k; d.bt = 0; if (chance(0.4)) say(pick(['冲呀~', '嗖——', '看我游多快!']), 1200); },
+    update(dt) {
+      const d = P.d, dist = fishMove(d.tx, d.ty, d.sp, dt, 4);
+      d.bt -= dt; if (d.bt <= 0) { d.bt = 0.09; bubble(P.x - P.face * 12 * S, P.y - 6 * S, 1); }
+      if (dist < 20 * k || P.mt > 4) setMode('float', { dur: rnd(1, 2) });
+    },
+    pose(p) { base(p); p.legs = 'run'; p.legT = P.legT; p.pitch = P.pitch || 0; p.eye = 'happy'; p.mouth = 'big'; }
+  };
+  // 翻跟头(竖直绕一圈)
+  B.loop = {
+    enter(d) {
+      fishFloat(); d.R = 46 * k; d.f = P.face; d.dur = 1.7;
+      d.cx = P.x; d.cy = clamp(P.y - d.R, petH + 14 * S + d.R, groundY - d.R - 4 * S); d.y0 = d.cy + d.R;
+      if (chance(0.5)) say(pick(['翻个跟头~', '看好啦!', '咻~']), 1100);
+    },
+    update(dt) {
+      const d = P.d, u = Math.min(1, P.mt / d.dur), th = TAU * (u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+      P.x = d.cx + d.R * Math.sin(th) * d.f; P.y = d.cy + d.R * Math.cos(th);
+      P.face = d.f; P.pitch = -th; P.legT += dt * 10;
+      if (u >= 1) { P.pitch = 0; stars(3); setMode('float', { dur: rnd(1, 2) }); }
+    },
+    pose(p) { base(p); p.legs = 'walk'; p.legT = P.legT; p.pitch = P.pitch; p.eye = 'happy'; p.mouth = 'big'; }
+  };
+  // 侧身翻一圈(滚筒翻):侧面 → 正面 → 肚皮朝上 → 背面 → 侧面
+  B.barrel = {
+    enter(d) { fishFloat(); d.dur = 1.5; d.sp = 70 * k; if (chance(0.4)) say('翻个身~', 1000); },
+    update(dt) {
+      const d = P.d; P.x += P.face * d.sp * dt; P.vy *= 0.9; fishClamp(); P.legT += dt * 6;
+      if (P.x <= petW * 0.6 + 1 || P.x >= W - petW * 0.6 - 1) P.face = -P.face;
+      if (P.mt > d.dur) setMode('float', { dur: rnd(1, 2) });
+    },
+    pose(p) {
+      base(p); const u = P.mt / P.d.dur; p.legs = 'walk'; p.legT = P.legT; p.eye = 'happy'; p.mouth = 'smile';
+      if (u > 0.2 && u < 0.36) p.view = 'front'; else if (u >= 0.36 && u < 0.62) { p.roll = 1; p.eye = 'wide'; p.mouth = 'o'; } else if (u >= 0.62 && u < 0.78) p.view = 'back';
+    }
+  };
+  // 吐泡泡
+  B.bubbles = {
+    enter(d) { d.dur = rnd(2.6, 4); d.bt = 0.3; d.n = 0; if (chance(0.5)) say(pick(['咕噜咕噜~', '吐个泡泡', '啵~']), 1300); },
+    update(dt) {
+      const d = P.d; d.bt -= dt; if (d.bt <= 0) { d.bt = rnd(0.25, 0.5); d.n++; const m = mouthPt(); bubble(m[0], m[1], 1); }
+      if (!P.plat) { const a = Math.exp(-dt * 2); P.vx *= a; P.vy *= a; }
+      if (P.mt > d.dur) decide();
+    },
+    pose(p) { base(p); p.mouth = (P.d.bt > 0.15) ? 'o' : 'smile'; p.eye = P.d.n % 3 === 2 ? 'happy' : 'open'; p.blush = 0.4; }
+  };
+  // 喷水
+  B.spout = {
+    enter(d) { d.dur = 2.4; d.st = 0; if (chance(0.6)) say(pick(['噗——!', '喷个水花~', '哗啦啦~']), 1300); },
+    update(dt) {
+      const d = P.d; d.st -= dt;
+      if (P.mt > 0.35 && P.mt < 1.9 && d.st <= 0) { d.st = 0.05; spawn('drop', P.x + P.face * 3 * S, P.y - 17 * S, { vx: rnd(-80, 80), vy: rnd(-260, -160), g: 520, life: rnd(0.6, 1), size: rnd(0.9, 1.5) }); }
+      if (P.mt > d.dur) decide();
+    },
+    pose(p) { base(p); const on = P.mt > 0.35 && P.mt < 1.9; p.spout = on; p.eye = on ? 'happy' : 'closed'; p.mouth = on ? 'big' : 'smile'; p.dy = on ? -0.5 : 0.5; p.puff = on ? 0 : clamp(P.mt / 0.35, 0, 1) * 0.6; }
+  };
+  // 追着鼠标游,追到了就绕着它转
+  B.chase = {
+    enter(d) { fishFloat(); d.dur = rnd(5, 8); d.orb = 0; d.a = 0; if (chance(0.5)) say(pick(['等等我~', '我来啦!', '抓到你了~']), 1300); },
+    update(dt) {
+      const d = P.d, tx = cur.x, ty = cur.y + 6 * S;
+      if (d.orb <= 0) {
+        const dist = fishMove(tx - P.face * 26 * k, ty, 200 * k, dt, 3.2);
+        if (dist < 30 * k) { d.orb = 2.6; d.a = Math.atan2(P.y - ty, P.x - tx); }
+      } else {
+        d.orb -= dt; d.a += dt * 2.6; const R = 52 * k;
+        fishMove(tx + Math.cos(d.a) * R, ty + Math.sin(d.a) * R * 0.6, 260 * k, dt, 6);
+        if (chance(dt * 1.5)) hearts(1, 4);
+        if (d.orb <= 0) { setMode('love'); return; }
+      }
+      if (P.mt > d.dur) setMode('float');
+    },
+    pose(p) { base(p); p.legs = 'walk'; p.legT = P.legT; p.pitch = P.pitch || 0; p.eye = 'happy'; p.mouth = 'smile'; p.blush = 0.5; }
+  };
+  // 转过来盯着你看
+  B.peek = {
+    enter(d) { d.dur = rnd(2.5, 4); faceCursor(0); if (chance(0.6)) say(pick(['盯——', '在看你哦', '(・ω・)', '你在忙什么呀?']), 1600); },
+    update(dt) { if (!P.plat) { P.vx *= 0.95; P.vy *= 0.95; } if (P.mt > P.d.dur) decide(); },
+    pose(p) { base(p); gaze(p, 900); p.blush = 0.6; p.mouth = P.mt % 1.6 < 1.2 ? 'smile' : 'cat'; }
+  };
+  // 潜下去,再冲出"水面"跃起
+  B.breach = {
+    enter(d) { fishFloat(); d.ph = 0; d.y0 = P.y; d.x0 = P.x; d.dir = P.face; },
+    update(dt) {
+      const d = P.d, G = G0 * k;
+      if (d.ph === 0) {                                   // 下潜
+        const dist = fishMove(d.x0 + d.dir * 60 * k, groundY - 4 * S, 230 * k, dt, 4);
+        if (dist < 16 * k || P.mt > 2.5) { d.ph = 1; const h = clamp(P.y - Math.max(petH + 30 * S, d.y0 - 120 * k), 120 * k, 360 * k); P.vy = -Math.sqrt(2 * G * h); P.vx = d.dir * 120 * k; splash(P.x, P.y, 8); say(pick(['跳——!', '哗啦!', '嘿咻!']), 1000); }
+      } else {                                            // 抛物线
+        P.vy += G * dt; P.x += P.vx * dt; P.y += P.vy * dt; P.x = clamp(P.x, petW * 0.6, W - petW * 0.6);
+        P.face = d.dir; P.legT += dt * 8;
+        P.pitch = clamp(Math.atan2(P.vy, Math.abs(P.vx)), -1.3, 1.3);
+        if (P.vy > 0 && P.y >= Math.min(groundY - 4 * S, d.y0 + 40 * k)) { P.vy *= 0.2; P.vx *= 0.3; splash(P.x, P.y - 4 * S, 6); setMode('float', { dur: rnd(1, 2) }); }
+      }
+    },
+    pose(p) { base(p); p.legs = P.d.ph ? 'run' : 'walk'; p.legT = P.legT; p.pitch = P.pitch || 0; p.eye = P.d.ph ? 'happy' : 'open'; p.mouth = P.d.ph ? 'big' : 'smile'; }
+  };
+  // 找个窗口 / 地面落下来歇一会
+  B.rest = {
+    enter(d) {
+      fishFloat();
+      const c = plats.filter(q => q.x2 - q.x1 > petW * 1.3 && q.y > petH + 20 * S);
+      let best = null, bs = 1e18;
+      for (const q of c) { const x = clamp(P.x, q.x1 + petW * 0.6, q.x2 - petW * 0.6), sc = Math.hypot(x - P.x, (q.y - P.y) * 1.3) + (q.y < P.y ? 120 * k : 0) + (String(q.key).startsWith('wb') ? 260 * k : 0) + rnd(0, 140) * k; if (sc < bs) { bs = sc; best = { q, x }; } }
+      if (!best) { setMode('float'); return; }
+      d.pl = best.q; d.tx = best.x;
+    },
+    update(dt) {
+      const d = P.d; if (!d.pl) return;
+      const pl = plats.find(q => q.key === d.pl.key) || null;
+      if (!pl) { setMode('float'); return; }
+      const dist = fishMove(clamp(d.tx, pl.x1 + petW * 0.5, pl.x2 - petW * 0.5), pl.y, 120 * k, dt, 3);
+      if (dist < 8 * k || (Math.abs(P.y - pl.y) < 6 * k && P.x >= pl.x1 && P.x <= pl.x2)) {
+        P.pitch = 0; P.vx = P.vy = 0; attach(pl); dust(3);
+        setMode('land', { impact: 300 * k, soft: true });
+      } else if (P.mt > 9) setMode('float');
+    },
+    pose(p) { base(p); p.legs = 'walk'; p.legT = P.legT; p.pitch = (P.pitch || 0) * 0.6; }
+  };
+  // 从平台上游起来
+  B.takeoff = {
+    enter(d) { fishFloat(); P.vy = -120 * k; P.vx = P.face * 40 * k; const t = fishTarget(chance(0.5)); setMode('swim', { tx: t.tx, ty: Math.min(t.ty, P.y - rnd(60, 220) * k) }); }
+  };
+  // 鱼被扔 / 松手:像在水里一样慢慢停下(不会摔到地上)
+  function fishDrift(dt) {
+    const d = P.d, sp = Math.hypot(P.vx, P.vy);
+    const a = Math.exp(-dt * (P.thrown ? 1.5 : 2.6)); P.vx *= a; P.vy *= a;            // 鱼在"水"里不受重力
+    P.x += P.vx * dt; P.y += P.vy * dt;
+    const m = petW * 0.6;
+    if (P.x < m || P.x > W - m) { P.x = clamp(P.x, m, W - m); if (Math.abs(P.vx) > 250 * k) { bonk(); d.vr = -(d.vr || 0) * 0.5; } P.vx = -P.vx * 0.5; }
+    if (P.y < petH + 10 * S) { P.y = petH + 10 * S; if (P.vy < -400 * k) { stars(3); say('哎哟!', 900); } P.vy = Math.abs(P.vy) * 0.4; }
+    if (P.y > groundY - 1) { P.y = groundY - 1; if (P.vy > 300 * k) splash(P.x, P.y, 5); P.vy = -Math.abs(P.vy) * 0.35; }
+    if (P.thrown) { P.rot += (d.vr || 0) * dt; d.vr = (d.vr || 0) * Math.exp(-dt * 1.8); d.maxSp = Math.max(d.maxSp || 0, sp); }
+    P.legT += dt * (2 + sp / (6 * S));
+    if (P.mt > 0.25 && sp < 45 * k) {
+      const was = P.thrown, hard = (d.maxSp || 0) > 1300 * k; P.thrown = false; P.rot = 0; P.pitch = 0; fishFloat();
+      if (Director.busy()) { decide(); return; }
+      if (P.greet) { P.greet = false; setMode('wave', { greet: true }); }
+      else if (hard) setMode('dizzy', { dur: 2.4 }); else if (was) { say(pick(['呼~ 游回来了', '咕噜…被扔出去了', '在水里飘呀飘~']), 1500); setMode('float', { dur: 1.2 }); } else setMode('float', { dur: rnd(0.8, 2) });
+    }
+  }
+  function fishDecide() {
+    const w = [], add = (n, wt) => { if (wt > 0 && n !== P.lastAct) w.push([n, wt]); };
+    const dist = Math.hypot(cur.x - P.x, cur.y - P.y), ui = userIdle();
+    const sleepy = ui > 90 || (isNight() && chance(0.3));
+    if (ui > 120 && !P.slept) { P.slept = true; P.lastAct = 'sleep'; return setMode('sleep', { auto: userIdle() > 60 }); }
+    if (ui < 20) P.slept = false;
+    if (cur.known && dist < 600 * k && cur.sp > 60 && cur.sp < 900 && chance(Life.followChance() * 0.8)) { P.lastAct = 'chase'; return setMode('chase'); }
+    add('swim', 30); add('float', 12); add('dash', 5); add('loop', 5); add('barrel', 4); add('bubbles', 6); add('spout', 4);
+    add('peek', 4); add('breach', 3); add('rest', 9); add('wave', 2); add('dance', 3); add('cheer', 1.5); add('spin', 2);
+    add('read', 2); add('coffee', 1.5); add('cookie', 2); add('laptop', 1.5); add('hiccup', 1); add('sneeze', 1); add('stretch', 2);
+    add('sleep', sleepy ? 9 : 0.8);
+    const sk = (Life.mem && Life.mem.skills) || {};
+    for (const nm in sk) add('skill:' + nm, 1.3);
+    const ws = Life.weights(w, { typing: isTyping() }).filter(([n]) => n !== P.lastAct);
+    const n = wpick(ws); P.lastAct = n;
+    if (n.startsWith('skill:')) { if (!Director.playSkill(n.slice(6))) setMode('float'); return; }
+    if (n === 'sleep') return setMode('sleep', { auto: userIdle() > 60 });
+    setMode(n);
+  }
+  /** 剧情里的移动:鱼直接游过去(不用一跳一跳) */
+  function fishNav(tx, ty, o) {
+    const dt = o.dt || 0.016, run = !!o.run;
+    NAV.moving = false;
+    if (P.mode !== 'story') return 'hopping';
+    let best = null, bs = 1e18;
+    for (const q of plats) { if (q.x2 - q.x1 < petW * 0.9) continue; const sc = navScore(q, tx, ty); if (sc < bs) { bs = sc; best = q; } }
+    if (!best) return 'stuck';
+    const m = petW * 0.45, lx = clamp(tx, best.x1 + m, best.x2 - m), sp = (run ? 230 : 110) * k;
+    if (P.plat === best && Math.abs(lx - P.x) <= 8 * k) return 'arrived';
+    if (P.plat === best) {                                  // 同一个平台:贴着平台游过去
+      const dx = lx - P.x; P.face = sign(dx); P.x += sign(dx) * Math.min(Math.abs(dx), sp * dt); P.legT += dt * (2 + sp / (7 * S)); NAV.moving = true; return 'moving';
+    }
+    if (P.plat) { P.plat = null; P.platKey = null; }
+    P.float = true; P.fly = false; NAV.moving = true;
+    const mid = Math.min(P.y, best.y) - 40 * k * clamp(Math.abs(lx - P.x) / (300 * k), 0, 1);
+    const ax = Math.abs(lx - P.x) > 60 * k ? (P.x + lx) / 2 : lx, ay = Math.abs(lx - P.x) > 60 * k ? Math.min(mid, best.y) : best.y;
+    const d = fishMove(Math.abs(lx - P.x) > 60 * k ? lx : lx, Math.abs(lx - P.x) > 90 * k ? Math.min(best.y, ay + (best.y - ay) * 0.3) : best.y, sp, dt, 3.5);
+    if (Math.hypot(lx - P.x, best.y - P.y) < 10 * k) { P.x = lx; P.vx = P.vy = 0; P.pitch = 0; P.float = false; attach(best); return 'arrived'; }
+    return 'moving';
+  }
+  /** 每帧在姿势上叠加鱼的东西:悬浮起伏、转身、正面/背面、翻肚皮睡觉、影子 */
+  function fishPose(p) {
+    if (P.face !== fishFace) { fishFace = P.face; if (!FISH_MODES.has(P.mode) || P.mode === 'float' || P.mode === 'peek') turnT = 0.2; }
+    turnT = Math.max(0, turnT - 1 / 60);
+    const fl = !P.plat && !AIR.has(P.mode) && P.mode !== 'air';
+    if (fl) {
+      p.lift = (p.lift || 0) + 1.4 + Math.sin(now * 1.7) * 1.1;
+      if (!p.legs || p.legs === 'stand') { p.swimA = 0.18; p.swimT = now * 2.4; }
+      p.shadow = 0;
+    }
+    if (FRONT_MODES.has(P.mode) && !p.view) p.view = 'front';
+    if (P.mode === 'ouch' && P.d.p2) p.view = 'back';
+    if (P.mode === 'sleep' && fl) { p.roll = 1; p.bend = 0.25; p.view = 'side'; p.legs = 'stand'; }
+    if (turnT > 0 && (!p.view || p.view === 'side')) p.view = 'front';
+    const MOVING = P.mode === 'swim' || P.mode === 'dash' || P.mode === 'loop' || P.mode === 'breach' || P.mode === 'chase' || P.mode === 'rest' || (P.mode === 'story' && NAV.moving);
+    if (!MOVING && P.mode !== 'air') { P.pitch = (P.pitch || 0) * 0.9; if (Math.abs(P.pitch) < 0.01) P.pitch = 0; }
+    if (p.pitch == null && P.pitch && MOVING) p.pitch = P.pitch;
+    if (P.mode === 'story' && P.float && NAV.moving) { p.legs = 'walk'; p.legT = P.legT; p.pitch = P.pitch || 0; p.rot = 0; }
+  }
+
   // ---------------------------------------------------------------- decisions
   function decide() {
     if (Director.onFree()) return;
+    if (FISH()) { if (!P.plat || P.float) return fishDecide(); if (chance(0.4)) return setMode('takeoff'); }
     if (!P.plat) { startFall(0, 0); return; }
     const pl = P.plat, width = pl.x2 - pl.x1, onWin = P.platKey !== 'g';
     const roomy = width > petW * 3, calmCur = cur.known;
@@ -1128,7 +1426,8 @@
     if (calmCur && dist < 700 && cur.sp > 60 && roomy && chance(Life.followChance())) { pickAct('follow'); return; }
     if (calmCur && dist > 90 && dist < 420 && cur.sp < 250 && cur.sp > 15 && Math.abs(cur.y - P.y) < 260 * k && chance(0.14) && now - (P.lastPounce || 0) > 20) { P.lastPounce = now; pickAct('pounce'); return; }
 
-    if (roomy) { add('walk', 22); add('run', 5); }
+    if (roomy) { add('walk', FISH() ? 6 : 22); add('run', FISH() ? 1 : 5); }
+    if (FISH()) { add('bubbles', 5); add('spout', 4); add('peek', 3); }
     add('idle', 12); add('sit', 7); add('wave', 3); add('dance', 4); add('stretch', 3); add('spin', 3);
     add('read', 3); add('coffee', 3); add('cookie', 2); add('laptop', 3); add('hop', 6); add('jump', 9);
     add('hiccup', 1.4); add('sneeze', 1.4); add('moonwalk', roomy ? 2 : 0); add('cheer', 2); add('bow', 1); add('flip', 2);
@@ -1348,6 +1647,7 @@
       if (q.life <= 0) { fx.splice(i, 1); continue; }
       q.vy += (q.g || 0) * dt; q.x += q.vx * dt; q.y += q.vy * dt;
       if (q.vr) q.rot += q.vr * dt;
+      if (q.wob != null) q.x += Math.sin(q.life * 5 + q.wob) * 14 * dt;
     }
   }
   function updateBall(dt) {
@@ -1381,6 +1681,7 @@
       pose.armL = [1, -6 + (f > 0 ? 1 : 0), 3]; pose.armR = [1, -6 + (f > 0 ? 0 : 1), 3];
     }
     if (P.shiny && !pose.hat) pose.hat = 'crown';
+    if (FISH()) fishPose(pose);
     if (Director.notePose) Director.notePose(pose);
     Director.draw(ctx, u, dpr, touch, 'back');
     Rig.drawPet(ctx, u, P.x * dpr, P.y * dpr, pose, P.face);
@@ -1405,7 +1706,7 @@
     globalUpdate(dt);
     const beh = B[P.mode]; if (beh && beh.update) beh.update(dt);
     // 地面兜底
-    if (!AIR.has(P.mode) && P.mode !== 'air' && P.mode !== 'flip' && !P.plat && P.mode !== 'crouch' && !P.fly) startFall(0, 0);
+    if (!AIR.has(P.mode) && P.mode !== 'air' && P.mode !== 'flip' && !P.plat && P.mode !== 'crouch' && !P.fly && !(FISH() && P.float)) startFall(0, 0);
     updateFx(dt); updateBall(dt); updateBubble(dt);
     render();
     requestAnimationFrame(frame);
@@ -1414,7 +1715,9 @@
   // ---------------------------------------------------------------- boot
   function summon() {
     P.x = rnd(W * 0.3, W * 0.7); P.y = -60; P.face = chance(0.5) ? 1 : -1; P.greet = true;
-    ball.on = false; startFall(0, 0);
+    ball.on = false;
+    if (FISH()) { P.x = P.face > 0 ? petW * 0.6 : W - petW * 0.6; P.y = rnd(H * 0.3, groundY - 40 * S); P.vx = P.vy = 0; setMode('swim', { tx: rnd(W * 0.3, W * 0.7), ty: rnd(H * 0.35, groundY - 30 * S) }); return; }
+    startFall(0, 0);
   }
 
   function applyCosmetics() {
@@ -1427,11 +1730,12 @@
     P.hat = P.baseHat;
   }
   P.baseHat = null; P.hat = null;
+  if (qs.get('skin')) applySkin(qs.get('skin'));
   P.shiny = qs.get('shiny') === '1' || Math.random() < 1 / 48;
   if (P.shiny) Rig.setPalette(true);
 
   if (api) {
-    api.onInfo(info => { sense = info.sense !== false; layout(info); });
+    api.onInfo(info => { sense = info.sense !== false; const ch = info.skin && (info.skin === 'whale') !== isFish(); layout(info); if (ch) { if (Director.active()) Director.stop(true); P.float = false; P.pitch = 0; P.rot = 0; P.greetText = Life.greeting(); summon(); } });
     api.onCursor(p => { if (p.idle != null) { sysIdle = p.idle; sysIdleAt = performance.now(); } setCursor(p.x, p.y); });
     api.onWindows(list => {
       list = list || [];
@@ -1485,6 +1789,7 @@
     H: () => H, overPet, typing: () => isTyping(), navStep, navReset, navPick, navMoving: () => NAV.moving,
     groundY: () => groundY, petH: () => petH, u: () => u, startFall, attachTo: pl => { attach(pl); }, platBelow, setExtraPlats, bigJump,
     findPlat: key => plats.find(q => q.key === key) || null, plats: () => plats,
+    fish: () => FISH(),
     genAbort: api && api.genAbort ? () => api.genAbort() : null,
     storyWarn: api && api.storyWarn ? m => api.storyWarn(m) : null,
     askText: api && api.askText ? q => api.askText(q) : null,

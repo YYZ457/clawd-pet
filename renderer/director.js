@@ -333,7 +333,8 @@
   // ------------------------------------------------------------ 移动(二维导航,可以追着鼠标跳上跳下)
   function setupMove(n) {
     st.moving = false; A.navReset();
-    const P = A.P, pl = P.plat, pw = A.petW(), S = A.S(), W = A.W(), H = A.H();
+    const P = A.P, pw = A.petW(), S = A.S(), W = A.W(), H = A.H(), pl = P.plat || (A.fish && A.fish() ? { x1: 0, x2: W } : null);
+    if (A.fish && A.fish() && P.fly) endFly();
     if (n.to === 'up' || n.to === 'down' || n.to === 'window' || n.to === 'ground') {
       const t = A.navPick(n.to);
       if (!t) { st.skip = true; return; }
@@ -410,8 +411,10 @@
     const it = u.it; u.t += dt;
     if (u.ph === 'wait') { if ((!it.falling && !it.roll) || u.t > 3) { u.ph = 'go'; u.t = 0; } return; }
     if (u.ph === 'go') {
+      const fish = A.fish && A.fish();
+      if (P.fly && fish) endFly();                                // 鱼:从半空直接游过去
       if (P.fly) { u.ph = 'act'; u.t = 0; return; }
-      if (P.mode !== 'story' || !P.plat) { if (u.t > 6) { u.ph = 'act'; u.t = 0; } return; }
+      if (P.mode !== 'story' || (!P.plat && !fish)) { if (u.t > 6) { u.ph = 'act'; u.t = 0; } return; }
       const sp = approachSpot(it, u.how);
       if (u.t < 12 && (Math.abs(sp.x - P.x) > 5 || Math.abs(sp.y - P.y) > 10)) {
         const r = A.navStep(sp.x, sp.y - 5.5 * S, { run: Math.abs(sp.x - P.x) > 420 * k, dt });
@@ -811,6 +814,8 @@
       case 'feet': ly = 0; break;
       case 'back': lx = -7; ly = B - 3; break;
     }
+    const g = Rig.anchor ? Rig.anchor(name, p) : null;      // 大肥鱼的身体结构不一样,锚点由 rig 给
+    if (g) { lx = g[0]; ly = g[1]; }
     const th = (p.rot || 0) * f, c = Math.cos(th), sn = Math.sin(th), y0 = ly + 6;   // 绕身体中心(pivot 0,-6)旋转
     const rx = lx * c - y0 * sn, ry = lx * sn + y0 * c - 6;
     return [P.x + f * (p.sx || 1) * rx * S, P.y - (p.lift || 0) * S + (p.sy || 1) * ry * S];
@@ -1065,7 +1070,7 @@
     if (hadSolid) pushPlats();
   }
   /** 模型指代道具的方式五花八门:key / 道具名(rocket)/ emoji / 别名(火箭)/ 被截断的长 key → 都尽量对上 */
-  const PET_REF = new Set(['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角']);
+  const PET_REF = new Set(['pet', 'clawd', 'me', 'self', 'player', 'hero', '宠物', '我', '自己', '小人', '主角', '大肥鱼', 'fatfish']);
   function findRef(ref, opt) {
     if (ref == null || ref === '') return null;
     const r = String(ref), lo = r.toLowerCase();

@@ -15,7 +15,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); }
 
 let win = null, tray = null, ps = null, domServer = null;
 const LLM_DEFAULT = { enabled: false, baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', keyEnc: '', keyPlain: '', dailyCalls: 60, dailyTokens: 600000, maxTokens: 8000 };
-let settings = { scale: 4, quiet: false, autostart: false, sense: true, llm: Object.assign({}, LLM_DEFAULT) };
+let settings = { scale: 4, quiet: false, autostart: false, sense: true, skin: 'clawd', llm: Object.assign({}, LLM_DEFAULT) };
 let chatWin = null, setWin = null, replyResolve = null, lastCtx = '', lastPet = { x: 400, y: 300 };
 let lastFg = '';
 let hiddenByUser = false, hiddenByFullscreen = false;
@@ -37,12 +37,22 @@ const memFile = () => path.join(app.getPath('userData'), 'memory.json');
 function loadMemory() { try { return JSON.parse(fs.readFileSync(memFile(), 'utf8')); } catch (_) { return null; } }
 function saveMemory(m) { try { fs.mkdirSync(path.dirname(memFile()), { recursive: true }); fs.writeFileSync(memFile(), JSON.stringify(m)); } catch (_) {} }
 
+// ------------------------------------------------------------ 形象
+const SKINS = [['clawd', 'Clawd(橙色小家伙)'], ['whale', '大肥鱼(蓝色胖鲸鱼)']];
+const skinId = () => (settings.skin === 'whale' ? 'whale' : 'clawd');
+const petName = () => (skinId() === 'whale' ? '大肥鱼' : 'Clawd');
+function setSkin(id) {
+  settings.skin = id === 'whale' ? 'whale' : 'clawd'; saveSettings();
+  if (win && !win.isDestroyed()) win.webContents.send('info', info());
+  if (tray) { tray.setImage(trayIcon()); tray.setToolTip(petName()); tray.setContextMenu(buildMenu()); }
+}
+
 // ------------------------------------------------------------ 窗口
 function display() { return screen.getPrimaryDisplay(); }
 function info() {
   const d = display();
   const b = d.bounds, wa = d.workArea;
-  return { width: b.width, height: b.height - 1, groundY: wa.y + wa.height - b.y, scale: settings.scale, quiet: settings.quiet, sense: settings.sense };
+  return { width: b.width, height: b.height - 1, groundY: wa.y + wa.height - b.y, scale: settings.scale, quiet: settings.quiet, sense: settings.sense, skin: skinId(), name: petName() };
 }
 
 function createWindow() {
@@ -353,7 +363,7 @@ async function handleAsk(text) {
   else if (/^\/学/.test(t)) t = '学一个新动作:' + t.slice(2);
   else if (/^\/聊/.test(t)) t = '闲聊:' + t.slice(2);
   setThinking(true);
-  try { return await startGen(llm.buildAsk(lastCtx, t), { premise: text }); }
+  try { return await startGen(llm.buildAsk(lastCtx, t, skinId()), { premise: text }); }
   catch (e) { const msg = errMsg(e); toOverlay('say', '😵 ' + msg); return { ok: false, error: msg }; }
   finally { setThinking(false); }
 }
@@ -365,7 +375,7 @@ async function handleContinue(st) {
     title: String(st.title || '').slice(0, 16), premise: String(st.premise || '').slice(0, 80), hint: String(st.hint || '').slice(0, 120),
     seg: clampN(Number(st.seg) || 1, 1, 9), maxSeg: 8, vars, log: Array.isArray(st.log) ? st.log.slice(-12).map(x => String(x).slice(0, 40)) : []
   };
-  try { return await startGen(llm.buildContinue(lastCtx, clean), { cont: true, premise: clean.premise }); }
+  try { return await startGen(llm.buildContinue(lastCtx, clean, skinId()), { cont: true, premise: clean.premise }); }
   catch (e) { return { ok: false, error: errMsg(e) }; }
 }
 
@@ -474,16 +484,34 @@ ipcMain.handle('set:test', async () => {
 
 // ------------------------------------------------------------ 托盘
 function trayIcon() {
-  // 16x16 的像素 Clawd,直接用位图生成,不需要图片文件
-  const px = [
+  // 16x16 的像素小图标,直接用位图生成,不需要图片文件
+  const whale = skinId() === 'whale';
+  const px = whale ? [
+    '................',
+    '..........x...x.',
+    '..........xx.xx.',
+    '...........xxx..',
+    '....xxxxx...x...',
+    '..xxxxxxxxx.x...',
+    '.xxxxxxxxxxxx...',
+    'xxeeexxxxxxxx...',
+    'xxepexxxxxxx....',
+    'xwwwwxxxxxxx....',
+    'xxwwwwwwxxx.....',
+    '.xxxwwwwxx......',
+    '..xxxxxxx.......',
+    '................',
+    '................',
+    '................'
+  ] : [
     '................',
     '................',
     '..xxxxxxxxxxxx..',
     '.xxxxxxxxxxxxxx.',
     '.xxxxxxxxxxxxxx.',
-    '.xxx..xxxx..xxx.',
-    'xxxx..xxxx..xxxx',
-    'xxxx..xxxx..xxxx',
+    '.xxxppxxxxppxxx.',
+    'xxxxppxxxxppxxxx',
+    'xxxxppxxxxppxxxx',
     '.xxxxxxxxxxxxxx.',
     '.xxxxxxxxxxxxxx.',
     '..xxxxxxxxxxxx..',
@@ -493,13 +521,12 @@ function trayIcon() {
     '................',
     '................'
   ];
+  const body = whale ? [0xFE, 0x6B, 0x4D] : [0x57, 0x77, 0xD9];   // BGR
   const buf = Buffer.alloc(16 * 16 * 4);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
     const i = (y * 16 + x) * 4, c = px[y][x];
-    const eye = (y === 5 || y === 6 || y === 7) && c === '.' && ((x >= 4 && x <= 5) || (x >= 10 && x <= 11)) && y >= 5 && y <= 7;
-    if (c === 'x') { buf[i] = 0x57; buf[i + 1] = 0x77; buf[i + 2] = 0xD9; buf[i + 3] = 255; } // BGRA
-    else if (eye) { buf[i] = 0x17; buf[i + 1] = 0x1a; buf[i + 2] = 0x1f; buf[i + 3] = 255; }
-    else buf[i + 3] = 0;
+    const col = c === 'x' ? body : c === 'p' ? [0x17, 0x1a, 0x1f] : (c === 'w' || c === 'e') ? [0xff, 0xff, 0xff] : null;
+    if (col) { buf[i] = col[0]; buf[i + 1] = col[1]; buf[i + 2] = col[2]; buf[i + 3] = 255; } else buf[i + 3] = 0;
   }
   return nativeImage.createFromBitmap(buf, { width: 16, height: 16 });
 }
@@ -514,31 +541,32 @@ function send(cmd) { if (win && !win.isDestroyed()) win.webContents.send('cmd', 
 function buildMenu() {
   const sizes = [['小', 3], ['中(默认)', 4], ['大', 5], ['特大', 7]];
   return Menu.buildFromTemplate([
-    { label: '🐾 召唤 Clawd', click: () => { hiddenByUser = false; applyVisibility(); send('summon'); } },
+    { label: '🐾 召唤 ' + petName(), click: () => { hiddenByUser = false; applyVisibility(); send('summon'); } },
     { label: '😴 哄它睡觉', click: () => send('sleep') },
     { label: '☀️ 叫醒它', click: () => send('wake') },
     { label: '💃 跳个舞', click: () => send('dance') },
     { type: 'separator' },
-    { label: '💬 和 Clawd 说话…(也可右键点它)', click: () => openChat({}) },
+    { label: '💬 和 ' + petName() + ' 说话…(也可右键点它)', click: () => openChat({}) },
     { label: '🎭 内置剧场', submenu: Stories.list.map(s => ({ label: s.title + ' — ' + s.desc, click: () => { const sc = Stories.get(s.id); if (sc) toOverlay('story', { payload: sc, premise: '内置:' + s.id }); } })) },
     { label: '⏹ 结束当前剧情', click: () => send('stopStory') },
     { label: '🔑 大模型设置(DeepSeek)…', click: () => openSettings() },
     { label: '📄 剧本日志(排查用)…', click: () => { try { fs.mkdirSync(logDir(), { recursive: true }); } catch (_) {} shell.openPath(logDir()); } },
     { type: 'separator' },
+    { label: '🎭 形象', submenu: SKINS.map(([id, n]) => ({ label: n, type: 'radio', checked: skinId() === id, click: () => { if (skinId() !== id) setSkin(id); } })) },
     { label: '大小', submenu: sizes.map(([n, v]) => ({ label: n, type: 'radio', checked: settings.scale === v, click: () => { settings.scale = v; saveSettings(); if (win) win.webContents.send('info', info()); } })) },
     { label: '💬 显示气泡文字', type: 'checkbox', checked: !settings.quiet, click: m => { settings.quiet = !m.checked; saveSettings(); if (win) win.webContents.send('info', info()); } },
     { label: '👀 感知我在用什么软件(仅本机,不上传)', type: 'checkbox', checked: settings.sense, click: m => { settings.sense = m.checked; saveSettings(); if (win) win.webContents.send('info', info()); } },
     { label: '开机自启', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin, click: m => { settings.autostart = m.checked; saveSettings(); try { app.setLoginItemSettings({ openAtLogin: m.checked }); } catch (_) {} } },
     { label: '🌐 浏览器插件(让它在网页上走)…', click: () => shell.openPath(extensionDir()) },
     { type: 'separator' },
-    { label: hiddenByUser ? '显示 Clawd' : '暂时藏起来', click: () => { hiddenByUser = !hiddenByUser; applyVisibility(); tray.setContextMenu(buildMenu()); } },
+    { label: hiddenByUser ? '显示 ' + petName() : '暂时藏起来', click: () => { hiddenByUser = !hiddenByUser; applyVisibility(); tray.setContextMenu(buildMenu()); } },
     { label: '退出', click: () => app.quit() }
   ]);
 }
 
 function createTray() {
   tray = new Tray(trayIcon());
-  tray.setToolTip('Clawd');
+  tray.setToolTip(petName());
   tray.setContextMenu(buildMenu());
   tray.on('click', () => { hiddenByUser = false; applyVisibility(); send('summon'); });
 }
@@ -586,6 +614,12 @@ function selfTest() {
   };
   win.webContents.on('did-finish-load', () => setTimeout(async () => {
     const res = { before, asks: [] };
+    if (process.env.CLAWD_SELFTEST_SKIN) {                        // 运行中切换形象
+      setSkin(process.env.CLAWD_SELFTEST_SKIN);
+      await new Promise(rs => setTimeout(rs, 2500));
+      res.skin = { id: skinId(), name: petName(), menu: buildMenu().items.map(i => i.label), tooltip: petName(), prompt: llm.systemFor(skinId()).slice(0, 40),
+        renderer: JSON.parse(await win.webContents.executeJavaScript('JSON.stringify({ skin: Rig.skin(), mode: __clawd.P.mode, float: !!__clawd.P.float, x: __clawd.P.x, y: __clawd.P.y })').catch(e => JSON.stringify(String(e)))) };
+    }
     const asks = JSON.parse(process.env.CLAWD_SELFTEST_ASKS || 'null') || [process.env.CLAWD_SELFTEST_ASK || '演一出海盗寻宝'];
     for (const a of asks) {
       const t1 = Date.now(), mark = events.length;
