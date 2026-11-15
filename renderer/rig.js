@@ -255,101 +255,119 @@ const Rig = (() => {
   }
 
 
-  // ---------------- 大肥鱼(蓝色胖鲸鱼):和 Clawd 共用同一套 pose,只是"身体"换了画法 ----------------
-  // 没有腿:legs 状态改成 蹦跶/压扁/甩尾;armL/armR 画成胸鳍;脸整体往前(+x)挪,尾巴翘在背后。
-  // 尾巴像素图:最后一行接进身体背部;前两行用暗色
-  const TAILS = {
-    A: ['xx...xx', 'xxx.xxx', '.xxxxx.', '..xxx..', '..xxx..', '...xxx.', '....xxx'],
-    B: ['xxx....', 'xxxx..x', '.xxxxxx', '..xxxx.', '...xxx.', '....xxx', '.....xx']
-  };
-  function wProfile(H, v) {
-    // 每一行 [左x, 右x)  前方 = +x;中间最胖
-    const A = v === 'B'
-      ? [[-4, 5], [-8, 7], [-10, 8], [-11, 9], [-11, 9]]
-      : [[-3, 5], [-6, 7], [-7, 8], [-8, 9], [-9, 9]];
-    const Z = v === 'B' ? [[-7, 7], [-9, 9], [-10, 9]] : [[-6, 7], [-8, 9], [-9, 9]];   // 底部 3 行(倒序)
-    const rows = [];
-    for (let r = 0; r < H; r++) {
-      const fromBot = H - 1 - r;
-      rows.push(fromBot < 3 ? Z[fromBot] : A[Math.min(r, A.length - 1)]);
-    }
-    return rows;
-  }
+  // ---------------- 大肥鱼(蓝色胖鲸鱼,参考 DeepSeek 图标):和 Clawd 共用同一套 pose ----------------
+  // 侧面像,前方 = +x。整只鲸鱼是一张 22x16 的像素图(由图标缩小后手工修整):
+  //   # 身体  w 白色月牙(嘴/肚皮)  e 眼白  p 瞳孔  t 尾巴(会摆)
+  // 没有腿:legs 状态改成 蹦跶 / 压扁 / 拉长 / 甩尾;armL/armR 画成胸鳍(平时收着,动起来才露出来)。
+  const WHALE = [
+    '......t...............',
+    '.....tt....######.....',
+    'ttt.ttt...##########..',
+    'ttttttt..############.',
+    '.ttttt..#############.',
+    '...tt..###############',
+    '...#######eee#####wwww',
+    '....######epp####wwww#',
+    '....######epp###wwwww#',
+    '....############wwwww#',
+    '.....#########wwwwww#.',
+    '.....########wwwwwww#.',
+    '......######ww##wwww..',
+    '.....######ww##wwww#..',
+    '.....##############...',
+    '..........#######.....'
+  ];
+  const WX = -12, WROWS = WHALE.length;           // 第 c 列 → x = c + WX;最后一行 → y = -1
   function drawWhale(R, p) {
-    const m = p.legs, T = p.legT, v = VAR;
-    let bb = -3; if (m === 'tuck') bb = -1; if (m === 'edge') bb = 0;
-    let hop = 0, wag = Math.sin(p.t * 2.2) * 0.7;
+    const m = p.legs, T = p.legT, E = PAL.eye, WH = PAL.white;
+    let hop = 0, wag = Math.sin(p.t * 2.2) * 0.8, squash = 0;
     if (m === 'walk' || m === 'run') { hop = Math.abs(Math.sin(T)) * (m === 'run' ? 2.2 : 1.2); wag = Math.sin(T) * 1.4; }
     else if (m === 'air') wag = Math.max(-1.5, Math.min(1.5, (p.legLift || 0) * 1.5));
     else if (m === 'dangle') wag = Math.sin(T) * 1.6;
     else if (m === 'edge') wag = Math.sin(T * 0.6);
-    const feet = false;
-    const B = bb + p.dy - hop - (feet ? 1 : 0);
-    const top = Math.round(B - 9);
-    const bot = Math.round((m === 'air' || m === 'dangle') ? B + 3 : (feet ? -2 : 0) - hop);
-    const H = Math.max(6, bot - top), rows = wProfile(H, v), back = rows[3] ? rows[3][0] : -8;
-    const F = (x, y, w, h, c) => R(x + 2, y, w, h, c);   // 脸往前挪 2 格
+    if (m === 'tuck') squash = 2; else if (m === 'edge') squash = 1;
+    squash += Math.round(p.dy || 0);                 // dy>0 压扁, dy<0 拉长
+    squash = Math.max(-2, Math.min(3, squash));
+    const air = m === 'air' || m === 'dangle';
+    const base = -Math.round(hop) + (air ? -2 : 0);  // 整体底部
+    // 行映射:压扁时去掉中间几行,拉长时重复中间一行
+    const rows = [];
+    for (let r = 0; r < WROWS; r++) {
+      if (squash > 0 && r >= 9 && r < 9 + squash) continue;
+      rows.push(r); if (squash < 0 && r === 9) for (let k = 0; k < -squash; k++) rows.push(r);
+    }
+    const n = rows.length, Y = i => base - (n - i);   // 第 i 个输出行的 y
+    const rowY = {}; rows.forEach((r, i) => { if (rowY[r] == null) rowY[r] = Y(i); });
+    const top = Y(1), B = rowY[8] + 5;              // B:和 Clawd 一样的"脸基线",眼睛在 B-6..B-3 附近
 
-    // 背后的气球
     if (p.prop === 'balloon') {
       const sway = Math.sin(p.t * 2) * 1.2;
       R(10, B - 26, 1, 22, '#e8e2dc'); R(6 + sway, B - 36, 9, 10, PAL.red); R(5 + sway, B - 34, 11, 6, PAL.red);
       R(8 + sway, B - 34, 2, 2, '#ff9d97'); R(9.5 + sway, B - 26, 2, 1, '#a82b27');
     }
-    // 尾巴(在身体后面,随 wag 左右摆)
-    const tl = TAILS[v] || TAILS.A, th = tl.length, tw = tl[0].length, w = Math.round(wag);
-    const tx = back - tw + 3, ty = top - th + 4;
-    for (let j = 0; j < th; j++) {
-      const sh = j < th - 2 ? w * (th - 2 - j) / (th - 2) : 0;
-      for (let i = 0; i < tw; i++) if (tl[j][i] === 'x') R(tx + i + Math.round(sh), ty + j, 1, 1, j < 2 ? PAL.dark : PAL.body);
+    const w = Math.round(wag), LC = SHINY ? PAL.belly : WH;
+    const eyeOpen = (p.eye === 'open' || p.eye === 'wide' || p.eye === 'angry' || p.eye === 'sad') && p.blink < 0.6;
+    for (let i = 0; i < n; i++) {
+      const line = WHALE[rows[i]], y = Y(i);
+      for (let c = 0; c < line.length; c++) {
+        const ch = line[c]; if (ch === '.') continue;
+        const x = c + WX;
+        if (ch === 't') { R(x, y + (c < 4 ? w : (c < 6 ? Math.round(w / 2) : 0)), 1, 1, PAL.body); continue; }
+        let col = PAL.body;
+        if (ch === 'w') col = LC;
+        else if ((ch === 'e' || ch === 'p') && eyeOpen) col = ch === 'p' ? E : WH;
+        R(x, y, 1, 1, col);
+      }
     }
-    // 小脚(C 版)
-    if (feet) {
-      let f1 = 0, f2 = 0;
-      if (m === 'walk' || m === 'run') { f1 = Math.max(0, Math.sin(T)) * 1.4; f2 = Math.max(0, Math.sin(T + Math.PI)) * 1.4; }
-      if (m !== 'tuck') { R(-4, bot - f1, 3, 2, PAL.dark); R(2, bot - f2, 3, 2, PAL.dark); }
+    // 眼睛:睁眼时用像素图里的白眼珠 + 瞳孔(随视线挪 1 格);其他表情借用 Clawd 的单只眼画法
+    const ex = Math.max(-1, Math.min(1, Math.round(p.ex))), ey = Math.max(-1, Math.min(1, Math.round(p.ey)));
+    const eyX = -2, eyY = rowY[6];
+    if (eyeOpen) {
+      R(eyX, eyY, 3, 3, WH);
+      R(eyX + 1 + Math.min(0, ex), eyY + 1 + Math.min(0, ey), 2, 2, E);
+      if (p.eye === 'wide') R(eyX - 1, eyY - 1, 3, 1, WH);
+      if (p.eye === 'angry') { R(eyX - 2, eyY - 2, 2, 1, E); R(eyX, eyY - 1, 2, 1, E); }
+      if (p.eye === 'sad') { R(eyX - 2, eyY - 1, 2, 1, E); R(eyX, eyY - 2, 2, 1, E); }
+    } else {
+      const pe = Object.assign({}, p, { ex: 0, ey: 0 });
+      if (pe.eye === 'open' || pe.eye === 'wide' || pe.eye === 'angry' || pe.eye === 'sad') pe.eye = 'closed';
+      // Clawd 的右眼画在 x≥0、y≈B-6..B-3;平移到大肥鱼的眼睛位置
+      const dx = eyX - 3, dy = (eyY + 3) - (B - 3);
+      drawEyes((x, y, ww, hh, c) => { if (x >= 0) R(x + dx, y + dy, ww, hh, c); }, pe, B);
     }
-    // 身体
-    for (let r = 0; r < H; r++) { const [a, b] = rows[r]; R(a, top + r, b - a, 1, PAL.body); }
-    // 肚皮(浅色,偏前)
-    const bel = [[-1, 8], [-4, 9], [-5, 7]];
-    for (let k = 0; k < 3; k++) {
-      const r = H - 3 + k; if (r < 3) continue;
-      const [a, b] = rows[r], x0 = Math.max(a, bel[k][0]), x1 = Math.min(b, bel[k][1]);
-      if (x1 > x0) R(x0, top + r, x1 - x0, 1, PAL.belly);
-    }
-    R(back + 1, top + H - 3, 2, 2, PAL.dark);           // 背后下方的阴影
-    R(-3, top + 1, 4, 1, PAL.light); R(-4, top + 2, 1, 1, PAL.light);   // 高光
-    // 喷水:开心大笑时、或者站着发呆时偶尔喷一下
+    if (p.blush > 0.02) { R.ga && R.ga(p.blush); R(eyX - 1, eyY + 4, 2, 1, PAL.blush); R.ga && R.ga(1); }
+    if (p.glasses === 'shades') { R(eyX - 2, eyY, 5, 3, '#15151a'); R(eyX + 3, eyY, 5, 1, '#15151a'); R(eyX - 1, eyY, 1, 1, '#6d6d7a'); }
+    if (p.tears) { const o = Math.floor((p.t * 7) % 4); R(eyX, eyY + 3 + o, 1, 2, PAL.tear); }
+    // 嘴:白色月牙本身就是笑着的嘴;其他嘴型画在最前端的嘴角上(小小的,不抢眼睛)
+    const mo = p.mouth, mx = 8, my = rowY[6];
+    if (mo === 'o') R(mx, my, 2, 2, E);
+    else if (mo === 'big') { R(mx - 1, my, 3, 2, E); R(mx, my + 2, 2, 1, '#e8647a'); }
+    else if (mo === 'yawn') { R(mx - 1, my, 3, 3, E); R(mx, my + 2, 2, 1, '#e8647a'); }
+    else if (mo === 'frown') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 1, my + 1, 2, 1, E); R(mx - 2, my + 2, 1, 1, E); }
+    else if (mo === 'flat') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 2, my + 1, 4, 1, E); }
+    else if (mo === 'munch') R(mx, my, 2, Math.sin(p.t * 16) > 0 ? 2 : 1, E);
+    else if (mo === 'cat') { R(mx - 2, my, 4, 1, PAL.body); R(mx - 2, my + 1, 1, 1, E); R(mx - 1, my + 2, 1, 1, E); R(mx, my + 1, 1, 1, E); R(mx + 1, my + 2, 1, 1, E); }
+    // 喷水(头顶的气孔)
     const spout = p.spout || (p.mouth === 'big' && p.eye === 'happy') || (m === 'stand' && (p.t % 13) < 1.1 && !p.hat);
     if (spout) {
-      const k = Math.floor(p.t * 8) % 2, W = '#8fd3ff', W2 = '#e6f7ff';
-      R(1, top - 2, 1, 2, W); R(1, top - 4, 1, 2, W2);
-      R(0 - k, top - 5, 1, 1, W); R(2 + k, top - 5, 1, 1, W); R(-1 - k, top - 4, 1, 1, W2); R(3 + k, top - 4, 1, 1, W2);
+      const k = Math.floor(p.t * 8) % 2, W = '#8fd3ff', W2 = '#e6f7ff', sx = 1;
+      R(sx, top - 2, 1, 2, W); R(sx, top - 4, 1, 2, W2);
+      R(sx - 1 - k, top - 5, 1, 1, W); R(sx + 1 + k, top - 5, 1, 1, W); R(sx - 2 - k, top - 4, 1, 1, W2); R(sx + 2 + k, top - 4, 1, 1, W2);
     }
-    // 脸
-    const Bf = B;
-    if (p.blush > 0.02) { R.ga && R.ga(p.blush); F(-6, Bf - 3, 2, 1, PAL.blush); F(4, Bf - 3, 2, 1, PAL.blush); R.ga && R.ga(1); }
-    drawEyes(F, p, Bf);
-    if (p.glasses === 'shades') {
-      F(-5, Bf - 6, 4, 3, '#15151a'); F(1, Bf - 6, 4, 3, '#15151a'); F(-1, Bf - 6, 2, 1, '#15151a');
-      F(-4, Bf - 6, 1, 1, '#6d6d7a'); F(2, Bf - 6, 1, 1, '#6d6d7a');
-    }
-    drawMouth(F, p, Bf);
-    if (p.tears) { const o = Math.floor((p.t * 7) % 4); F(-4, Bf - 3 + o, 1, 2, PAL.tear); F(3, Bf - 3 + ((o + 2) % 4), 1, 2, PAL.tear); }
-    // 胸鳍(= 手臂)
+    // 胸鳍(= 手臂):平时收在身体里,动起来才露出来
     const fin = (x, a, side) => {
-      const y = Bf - 5 + a[1], up = a[1] < -2;
+      if (!a[0] && !a[1] && a[2] === 3) return;
+      const y = B - 5 + a[1], up = a[1] < -2;
       R(x, y, 2, a[2], PAL.dark);
       R(x + (side > 0 ? 2 : -1), up ? y : y + a[2] - 1, 1, 1, PAL.dark);
     };
     fin(-9 - p.armL[0], p.armL, -1);
-    fin(7 + p.armR[0], p.armR, 1);
-    drawProp(R, p, Bf);
-    drawHat((x, y, w, h, c) => R(x + 1, y, w, h, c), p, top + 1);
+    fin(9 + p.armR[0], p.armR, 1);
+    drawProp(R, p, B);
+    drawHat((x, y, ww, hh, c) => R(x + 2, y, ww, hh, c), p, top + 1);
     if (p.dizzy) {
       for (let i = 0; i < 3; i++) {
-        const a = p.t * 6 + i * 2.1, sx = Math.cos(a) * 8, sy = top - 3 + Math.sin(a) * 1.8;
+        const a = p.t * 6 + i * 2.1, sx = 2 + Math.cos(a) * 8, sy = top - 3 + Math.sin(a) * 1.8;
         R(sx - 1, sy, 3, 1, PAL.gold); R(sx, sy - 1, 1, 3, PAL.gold);
       }
     }
